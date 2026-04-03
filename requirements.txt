@@ -1,0 +1,9 @@
+gradio==6.10.0
+groq==1.1.2
+rasterio==1.4.4
+pysheds==0.5
+numpy==1.26.4
+requests==2.33.1
+geopy==2.4.1
+python-dotenv==1.0.1
+shapely==2.1.2
