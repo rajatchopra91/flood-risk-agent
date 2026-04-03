@@ -1,5 +1,6 @@
 import os
 import json
+import math
 import requests
 import gradio as gr
 from tools import full_site_analysis
@@ -8,52 +9,42 @@ from dotenv import load_dotenv
 from dem_downloader import precache_cities
 import plotly.graph_objects as go
 
+load_dotenv()
+
 def ensure_dems():
-    """Restore DEMs from HF Space repo storage."""
-    import os
     from huggingface_hub import hf_hub_download
     token = os.getenv("HF_TOKEN")
     if not token:
-        print("No HF_TOKEN found, skipping DEM restore")
+        print("No HF_TOKEN — skipping DEM restore")
         return
-    os.makedirs("data/dem", exist_ok=True)
-    # List of known DEM files to restore
     dem_files = [
-        "mumbai_dem.tif", "delhi_dem.tif", "bangalore_dem.tif",
-        "pune_dem.tif", "hyderabad_dem.tif", "chennai_dem.tif",
-        "kolkata_dem.tif", "ahmedabad_dem.tif", "jaipur_dem.tif",
-        "lucknow_dem.tif", "surat_dem.tif", "bhopal_dem.tif",
-        "patna_dem.tif", "nagpur_dem.tif", "indore_dem.tif",
-        "noida_dem.tif", "bandra_dem.tif", "bhagalpur_dem.tif",
-        "sirsa_dem.tif", "haridwar_dem.tif", "dehradun_dem.tif",
-        "srinagar_dem.tif", "thane_dem.tif", "whitefield_dem.tif",
+        "mumbai_dem.tif","delhi_dem.tif","bangalore_dem.tif","pune_dem.tif",
+        "hyderabad_dem.tif","chennai_dem.tif","kolkata_dem.tif","ahmedabad_dem.tif",
+        "jaipur_dem.tif","lucknow_dem.tif","surat_dem.tif","bhopal_dem.tif",
+        "patna_dem.tif","nagpur_dem.tif","indore_dem.tif","noida_dem.tif",
+        "bandra_dem.tif","bhagalpur_dem.tif","sirsa_dem.tif","haridwar_dem.tif",
+        "dehradun_dem.tif","srinagar_dem.tif","thane_dem.tif","whitefield_dem.tif",
         "koregaon_park_dem.tif"
     ]
+    os.makedirs("data/dem", exist_ok=True)
     restored = 0
     for f in dem_files:
-        local_path = f"data/dem/{f}"
-        if not os.path.exists(local_path):
+        local = f"data/dem/{f}"
+        if not os.path.exists(local):
             try:
-                print(f"Restoring {f}...")
-                hf_hub_download(
-                    repo_id="rajatchopra91/flood-risk-agent",
-                    repo_type="space",
-                    filename=f"data/dem/{f}",
-                    local_dir=".",
-                    token=token
-                )
+                hf_hub_download(repo_id="rajatchopra91/flood-risk-agent",
+                                repo_type="space", filename=f"data/dem/{f}",
+                                local_dir=".", token=token)
                 restored += 1
+                print(f"Restored {f}")
             except Exception as e:
                 print(f"Could not restore {f}: {e}")
         else:
             restored += 1
-    print(f"DEMs ready: {restored}/{len(dem_files)} files")
+    print(f"DEMs ready: {restored}/{len(dem_files)}")
 
-
-
-load_dotenv()
 ensure_dems()
-# precache_cities() disabled on HF Spaces — DEMs restored from storage instead
+# precache_cities() disabled — DEMs restored from HF storage
 
 SEASON_MULTIPLIERS = {
     "🌧️ Monsoon (Jun–Sep)": 1.6,
@@ -62,21 +53,45 @@ SEASON_MULTIPLIERS = {
 }
 
 SEASON_NOTE = {
-    "🌧️ Monsoon (Jun–Sep)": "Risk is elevated due to heavy rainfall and high river levels typical during monsoon months.",
-    "🌦️ Post-monsoon (Oct–Dec)": "Moderate risk — soils are saturated from monsoon, drainage systems under stress.",
-    "☀️ Dry Season (Jan–May)": "Lower risk period — reduced rainfall and river levels are typically low."
+    "🌧️ Monsoon (Jun–Sep)": "Risk is elevated due to heavy rainfall and high river levels.",
+    "🌦️ Post-monsoon (Oct–Dec)": "Soils are saturated from monsoon, drainage systems under stress.",
+    "☀️ Dry Season (Jan–May)": "Lower risk — reduced rainfall and river levels typically low."
 }
 
 URISK_LOGO = "data:image/png;base64,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"
 
+MAX_POLYGON_KM2 = 25.0
+
+
+def polygon_area_km2(geojson: dict) -> float:
+    """Calculate polygon area in km² using spherical excess formula."""
+    try:
+        if geojson.get("type") == "FeatureCollection":
+            coords = geojson["features"][0]["geometry"]["coordinates"][0]
+        elif geojson.get("type") == "Feature":
+            coords = geojson["geometry"]["coordinates"][0]
+        else:
+            coords = geojson["coordinates"][0]
+        n = len(coords)
+        area = 0.0
+        for i in range(n):
+            j = (i + 1) % n
+            xi = coords[i][0] * math.pi / 180
+            yi = coords[i][1] * math.pi / 180
+            xj = coords[j][0] * math.pi / 180
+            yj = coords[j][1] * math.pi / 180
+            area += (xj - xi) * (2 + math.sin(yi) + math.sin(yj))
+        return abs(area * 6371 * 6371 / 2)
+    except Exception:
+        return 0.0
+
 
 def get_osm_boundary(place_name: str):
     try:
-        url = "https://nominatim.openstreetmap.org/search"
-        params = {"q": f"{place_name}, India", "format": "json",
-                  "limit": 1, "polygon_geojson": 1}
-        headers = {"User-Agent": "flood-risk-agent"}
-        resp = requests.get(url, params=params, headers=headers, timeout=10)
+        resp = requests.get("https://nominatim.openstreetmap.org/search",
+            params={"q": f"{place_name}, India", "format": "json",
+                    "limit": 1, "polygon_geojson": 1},
+            headers={"User-Agent": "flood-risk-agent"}, timeout=10)
         data = resp.json()
         if data and "geojson" in data[0]:
             return json.dumps(data[0]["geojson"])
@@ -91,59 +106,45 @@ def create_plotly_map(lat, lon, risk_level, place_name, elevation,
     risk_colors = {"High": "#c62828", "Moderate": "#e65100", "Low": "#2e7d32"}
     color = risk_colors.get(risk_level, "#1565c0")
     elev_str = f"{elevation:.1f}" if isinstance(elevation, float) else str(elevation)
+    r, g, b = int(color[1:3],16), int(color[3:5],16), int(color[5:7],16)
 
     fig = go.Figure()
 
-    # Administrative boundary
     if boundary_geojson:
         try:
             geom = json.loads(boundary_geojson)
-            geom_type = geom.get("type", "")
-            coords_list = []
-            if geom_type == "Polygon":
-                coords_list = [geom["coordinates"][0]]
-            elif geom_type == "MultiPolygon":
-                coords_list = [p[0] for p in geom["coordinates"]]
-            for coords in coords_list:
-                lons = [c[0] for c in coords]
-                lats = [c[1] for c in coords]
+            rings = []
+            if geom["type"] == "Polygon": rings = [geom["coordinates"][0]]
+            elif geom["type"] == "MultiPolygon": rings = [p[0] for p in geom["coordinates"]]
+            for ring in rings:
                 fig.add_trace(go.Scattermap(
-                    lon=lons, lat=lats, mode="lines",
-                    line=dict(color=color, width=2.5),
-                    fill="toself",
-                    fillcolor=f"rgba({int(color[1:3], 16)},{int(color[3:5], 16)},{int(color[5:7], 16)},0.15)",
-                    name="Boundary", showlegend=False, hoverinfo="skip"
+                    lon=[c[0] for c in ring], lat=[c[1] for c in ring],
+                    mode="lines", line=dict(color=color, width=2.5),
+                    fill="toself", fillcolor=f"rgba({r},{g},{b},0.15)",
+                    name="Admin boundary", showlegend=True, hoverinfo="skip",
+                    legendgroup="boundary"
                 ))
-        except Exception:
-            pass
+        except Exception: pass
 
-    # Site polygon (for polygon tab)
     if polygon_geojson_str:
         try:
             geom = json.loads(polygon_geojson_str)
             coords = geom.get("coordinates", [[]])[0]
-            lons = [c[0] for c in coords]
-            lats = [c[1] for c in coords]
             fig.add_trace(go.Scattermap(
-                lon=lons, lat=lats, mode="lines",
-                line=dict(color="#1565c0", width=2.5),
-                fill="toself",
-                fillcolor="rgba(21,101,192,0.2)",
-                name="Site polygon", showlegend=False, hoverinfo="skip"
+                lon=[c[0] for c in coords], lat=[c[1] for c in coords],
+                mode="lines", line=dict(color="#1565c0", width=2.5),
+                fill="toself", fillcolor="rgba(21,101,192,0.2)",
+                name="Site boundary", showlegend=True, hoverinfo="skip"
             ))
-        except Exception:
-            pass
+        except Exception: pass
 
-    # Site marker
-    # Site marker with always-visible label
     fig.add_trace(go.Scattermap(
-        lon=[lon], lat=[lat],
-        mode="markers+text",
+        lon=[lon], lat=[lat], mode="markers+text",
         marker=dict(size=14, color=color, symbol="circle"),
-        text=[f"<b>{risk_level} Risk — {score}/100</b>"],
+        text=[f"{risk_level} Risk — {score}/100"],
         textposition="top right",
-        textfont=dict(size=12, color=color),
-        customdata=[[place_name, elev_str, catchment, season]],
+        textfont=dict(size=11, color=color),
+        customdata=[[place_name, elev_str, catchment, season, score]],
         hovertemplate=(
             "<b>%{customdata[0]}</b><br>"
             f"{risk_level} Risk — {score}/100<br>"
@@ -155,31 +156,24 @@ def create_plotly_map(lat, lon, risk_level, place_name, elevation,
     ))
 
     fig.update_layout(
-        map=dict(
-            style="open-street-map",
-            center=dict(lat=lat, lon=lon),
-            zoom=11
-        ),
-        margin=dict(l=0, r=0, t=0, b=0),
-        height=450,
+        map=dict(style="open-street-map", center=dict(lat=lat, lon=lon), zoom=11),
+        margin=dict(l=0, r=0, t=0, b=0), height=450,
         paper_bgcolor="#f0f4f8",
+        legend=dict(
+            x=0.01, y=0.99, bgcolor="white", bordercolor=color,
+            borderwidth=1.5, font=dict(size=11)
+        ),
         annotations=[dict(
-            x=0.01, y=0.99,
-            xref="paper", yref="paper",
+            x=0.01, y=0.97, xref="paper", yref="paper",
             xanchor="left", yanchor="top",
-            text=(
-                f"<b>📍 {place_name}</b><br>"
-                f"<span style='color:{color}'>{risk_level} Risk — {score}/100</span><br>"
-                f"🏔️ Elevation: {elev_str}m<br>"
-                f"🌊 Catchment: {catchment} km²<br>"
-                f"🗓️ {season}"
-            ),
-            showarrow=False,
-            bgcolor="white",
-            bordercolor=color,
-            borderwidth=2,
-            borderpad=8,
-            font=dict(size=12)
+            text=(f"<b>{place_name}</b><br>"
+                  f"<span style='color:{color}'>{risk_level} Risk — {score}/100</span><br>"
+                  f"Elevation: {elev_str}m<br>"
+                  f"Catchment: {catchment} km²<br>"
+                  f"{season}"),
+            showarrow=False, bgcolor="white",
+            bordercolor=color, borderwidth=2, borderpad=8,
+            font=dict(size=11)
         )]
     )
     return fig
@@ -191,18 +185,15 @@ def extract_location(user_query: str) -> str:
         model="llama-3.1-8b-instant",
         messages=[
             {"role": "system", "content": (
-                "You are a location extractor. Your only job is to extract the city or place name from text. "
-                "Output ONLY the place name — nothing else. No sentences, no explanations. "
+                "You are a location extractor. Output ONLY the place name — nothing else. "
                 "Examples:\n"
-                "Input: 'Is Bhagalpur safe for a data center?' → Output: Bhagalpur\n"
-                "Input: 'flood risk in Bandra Mumbai' → Output: Bandra, Mumbai\n"
-                "Input: 'Should I build in Whitefield Bangalore?' → Output: Whitefield, Bangalore\n"
-                "Input: 'Is Koregaon Park in Pune safe?' → Output: Koregaon Park, Pune\n"
+                "Input: Is Bhagalpur safe for a data center? → Output: Bhagalpur\n"
+                "Input: flood risk in Bandra Mumbai → Output: Bandra, Mumbai\n"
+                "Input: Should I build in Whitefield Bangalore? → Output: Whitefield, Bangalore\n"
                 "Never refuse. Always output just the place name."
             )},
             {"role": "user", "content": user_query}
-        ],
-        temperature=0.0
+        ], temperature=0.0
     )
     raw = extraction.choices[0].message.content.strip()
     return raw.split("\n")[0].strip().strip("'\"")
@@ -211,16 +202,13 @@ def extract_location(user_query: str) -> str:
 def generate_report(user_query: str, data: dict, season: str) -> str:
     client = Groq(api_key=os.getenv("GROQ_API_KEY"))
     clean_data = {
-        "place": data.get("place"),
-        "input_type": data.get("input_type"),
+        "place": data.get("place"), "input_type": data.get("input_type"),
         "season": data.get("season"),
         "coordinates": data.get("coordinates", {}).get("display_name"),
         "elevation": {k: v for k, v in data.get("elevation", {}).items()
-                      if k in ["elevation_m", "elevation_mean_m", "elevation_min_m", "elevation_max_m"]},
-        "watershed": {
-            "catchment_area_km2": data.get("watershed", {}).get("catchment_area_km2"),
-            "flow_accumulation_at_site": data.get("watershed", {}).get("flow_accumulation_at_site")
-        },
+                      if k in ["elevation_m","elevation_mean_m","elevation_min_m","elevation_max_m"]},
+        "watershed": {"catchment_area_km2": data.get("watershed",{}).get("catchment_area_km2"),
+                      "flow_accumulation_at_site": data.get("watershed",{}).get("flow_accumulation_at_site")},
         "risk": data.get("risk")
     }
     response = client.chat.completions.create(
@@ -282,27 +270,6 @@ def analyse_location(user_query: str, season: str, progress=gr.Progress()):
         return f"Error: {str(e)}", None, "Error."
 
 
-def analyse_from_coords(lat: float, lon: float, radius_m: float, season: str, progress=gr.Progress()):
-    try:
-        progress(0.2, desc="🛰️ Downloading elevation data...")
-        from tools import full_site_analysis_from_coords
-        data = full_site_analysis_from_coords(lat, lon, int(radius_m))
-        progress(0.6, desc="🌊 Analysing flood risk...")
-        data = apply_season(data, season)
-        elevation = get_elevation_display(data)
-        catchment = data["watershed"]["catchment_area_km2"]
-        progress(0.8, desc="🤖 Generating report...")
-        report = generate_report(f"Flood risk at {lat}, {lon}", data, season)
-        progress(0.9, desc="🗺️ Rendering map...")
-        fig = create_plotly_map(lat, lon, data["risk"]["risk_level"],
-                                f"Site ({lat:.4f}, {lon:.4f})",
-                                elevation, catchment, data["risk"]["risk_score"], season)
-        progress(1.0, desc="✅ Done!")
-        return report, fig, f"📍 {data['coordinates']['display_name']}"
-    except Exception as e:
-        return f"Error: {str(e)}", None, "Error in analysis."
-
-
 def analyse_from_polygon(geojson_file, season: str, progress=gr.Progress()):
     if geojson_file is None:
         return "Please upload a GeoJSON file.", None, "No file uploaded."
@@ -310,10 +277,13 @@ def analyse_from_polygon(geojson_file, season: str, progress=gr.Progress()):
         progress(0.1, desc="📂 Reading polygon...")
         file_size_kb = os.path.getsize(geojson_file.name) / 1024
         if file_size_kb > 500:
-            return f"File too large ({file_size_kb:.0f}KB). Please upload under 500KB.", None, "File too large."
+            return f"File too large ({file_size_kb:.0f}KB). Max 500KB.", None, "File too large."
         with open(geojson_file.name, "r") as f:
             geojson = json.load(f)
-        progress(0.3, desc="🛰️ Downloading & clipping DEM to polygon...")
+        area = polygon_area_km2(geojson)
+        if area > MAX_POLYGON_KM2:
+            return f"Polygon too large ({area:.1f} km²). Max {MAX_POLYGON_KM2} km². Please clip to your actual site boundary.", None, "Polygon too large."
+        progress(0.3, desc="🛰️ Downloading & clipping DEM...")
         from tools import full_site_analysis_from_polygon
         data = full_site_analysis_from_polygon(geojson)
         progress(0.6, desc="🌊 Analysing flood risk...")
@@ -323,26 +293,171 @@ def analyse_from_polygon(geojson_file, season: str, progress=gr.Progress()):
         lat, lon = data["coordinates"]["lat"], data["coordinates"]["lon"]
         progress(0.8, desc="🤖 Generating report...")
         report = generate_report("Flood risk for uploaded polygon site", data, season)
-        progress(0.9, desc="🗺️ Rendering map with polygon...")
-        raw_geojson = data.get("polygon_geojson", {})
-        if raw_geojson.get("type") == "FeatureCollection":
-            polygon_geojson = json.dumps(raw_geojson["features"][0]["geometry"])
-        elif raw_geojson.get("type") == "Feature":
-            polygon_geojson = json.dumps(raw_geojson["geometry"])
+        progress(0.9, desc="🗺️ Rendering map...")
+        raw = data.get("polygon_geojson", {})
+        if raw.get("type") == "FeatureCollection":
+            poly = json.dumps(raw["features"][0]["geometry"])
+        elif raw.get("type") == "Feature":
+            poly = json.dumps(raw["geometry"])
         else:
-            polygon_geojson = json.dumps(raw_geojson)
+            poly = json.dumps(raw)
         fig = create_plotly_map(lat, lon, data["risk"]["risk_level"], "Uploaded Site",
                                 elevation, catchment, data["risk"]["risk_score"],
-                                season, polygon_geojson_str=polygon_geojson)
+                                season, polygon_geojson_str=poly)
         progress(1.0, desc="✅ Done!")
         return report, fig, f"📍 {data['coordinates']['display_name']}"
     except Exception as e:
         return f"Error: {str(e)}", None, "Error in analysis."
 
 
+def analyse_from_drawn(geojson_str: str, season: str, progress=gr.Progress()):
+    """Analyse polygon drawn on the map widget."""
+    if not geojson_str or geojson_str.strip() == "":
+        return "Please draw a polygon on the map first.", None, "No polygon drawn."
+    try:
+        geojson = json.loads(geojson_str)
+        area = polygon_area_km2(geojson)
+        if area > MAX_POLYGON_KM2:
+            return f"Drawn polygon too large ({area:.1f} km²). Max {MAX_POLYGON_KM2} km². Please redraw.", None, "Polygon too large."
+        if area < 0.001:
+            return "Polygon area too small. Please draw a larger boundary.", None, "Polygon too small."
+        progress(0.2, desc="🛰️ Downloading & clipping DEM...")
+        from tools import full_site_analysis_from_polygon
+        data = full_site_analysis_from_polygon(geojson)
+        progress(0.6, desc="🌊 Analysing flood risk...")
+        data = apply_season(data, season)
+        elevation = get_elevation_display(data)
+        catchment = data["watershed"]["catchment_area_km2"]
+        lat, lon = data["coordinates"]["lat"], data["coordinates"]["lon"]
+        progress(0.8, desc="🤖 Generating report...")
+        report = generate_report(f"Flood risk for drawn site polygon ({area:.2f} km²)", data, season)
+        progress(0.9, desc="🗺️ Rendering map...")
+        raw = data.get("polygon_geojson", {})
+        if raw.get("type") == "FeatureCollection":
+            poly = json.dumps(raw["features"][0]["geometry"])
+        elif raw.get("type") == "Feature":
+            poly = json.dumps(raw["geometry"])
+        else:
+            poly = json.dumps(raw)
+        fig = create_plotly_map(lat, lon, data["risk"]["risk_level"], f"Drawn Site ({area:.1f} km²)",
+                                elevation, catchment, data["risk"]["risk_score"],
+                                season, polygon_geojson_str=poly)
+        progress(1.0, desc="✅ Done!")
+        return report, fig, f"📍 {data['coordinates']['display_name']}"
+    except Exception as e:
+        return f"Error: {str(e)}", None, "Error in analysis."
+
+
+DRAW_WIDGET_HTML = """<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
+<style>
+* { margin:0;padding:0;box-sizing:border-box; }
+body { font-family:"Segoe UI",sans-serif;background:#f0f4f8; }
+#search { width:100%;padding:8px 12px;border:1.5px solid #cbd5e1;border-radius:8px;
+          font-size:13px;margin-bottom:6px;outline:none; }
+#map { width:100%;height:340px;border-radius:8px 8px 0 0; }
+#bar { background:white;border:1px solid #cbd5e1;border-top:none;border-radius:0 0 8px 8px;
+       padding:10px 14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap; }
+#hint { font-size:12px;color:#666;flex:1; }
+#badge { padding:3px 10px;border-radius:16px;font-size:11px;font-weight:700;display:none; }
+#badge.ok  { background:#e8f5e9;color:#2e7d32;border:1.5px solid #2e7d32; }
+#badge.warn{ background:#fff3e0;color:#e65100;border:1.5px solid #e65100; }
+#badge.bad { background:#ffebee;color:#c62828;border:1.5px solid #c62828; }
+#btn { padding:6px 16px;background:#1565c0;color:white;border:none;border-radius:8px;
+       font-size:12px;font-weight:700;cursor:pointer; }
+#btn:disabled { background:#aaa;cursor:not-allowed; }
+</style>
+</head>
+<body>
+<input id="search" type="text" placeholder="Search city in India to navigate map..." oninput="onSearch(this.value)"/>
+<div id="map"></div>
+<div id="bar">
+  <span id="hint">Use the polygon tool (pentagon icon) on the map to draw your site boundary</span>
+  <span id="badge">0 km²</span>
+  <button id="btn" disabled onclick="confirm()">✓ Analyse Site</button>
+</div>
+<script>
+var map = L.map("map").setView([20.59, 78.96], 5);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{
+  attribution:"© OpenStreetMap contributors",maxZoom:18}).addTo(map);
+var drawn = new L.FeatureGroup(); map.addLayer(drawn);
+var ctrl = new L.Control.Draw({
+  edit:{featureGroup:drawn,remove:true},
+  draw:{polygon:{allowIntersection:false,shapeOptions:{color:"#1565c0",fillOpacity:0.2}},
+        polyline:false,rectangle:false,circle:false,marker:false,circlemarker:false}
+});
+map.addControl(ctrl);
+var geojson=null, MAX=25;
+function area(layer){
+  var ll=layer.getLatLngs()[0],a=0,n=ll.length;
+  for(var i=0;i<n;i++){var j=(i+1)%n,xi=ll[i].lng*Math.PI/180,yi=ll[i].lat*Math.PI/180,
+    xj=ll[j].lng*Math.PI/180,yj=ll[j].lat*Math.PI/180;
+    a+=(xj-xi)*(2+Math.sin(yi)+Math.sin(yj));}
+  return Math.abs(a*6371*6371/2);
+}
+function badge(km2){
+  var b=document.getElementById("badge"),btn=document.getElementById("btn"),
+      h=document.getElementById("hint");
+  b.style.display="inline-block"; b.textContent=km2.toFixed(2)+" km²";
+  if(km2>MAX){b.className="bad";btn.disabled=true;
+    h.textContent="Area too large — max 25 km². Please redraw a smaller boundary.";}
+  else if(km2>MAX*0.8){b.className="warn";btn.disabled=false;
+    h.textContent="Large area — analysis may take 30–60s.";}
+  else{b.className="ok";btn.disabled=false;
+    h.textContent="Site boundary ready. Click Analyse Site.";}
+}
+map.on(L.Draw.Event.CREATED,function(e){
+  drawn.clearLayers(); drawn.addLayer(e.layer);
+  geojson=e.layer.toGeoJSON(); badge(area(e.layer));
+});
+map.on(L.Draw.Event.DELETED,function(){
+  geojson=null;
+  document.getElementById("badge").style.display="none";
+  document.getElementById("btn").disabled=true;
+  document.getElementById("hint").textContent="Use the polygon tool to draw your site boundary";
+});
+function confirm(){
+  if(!geojson)return;
+  window.parent.postMessage({type:"flood_polygon",data:JSON.stringify(geojson)},"*");
+  document.getElementById("hint").textContent="✓ Sent for analysis...";
+  document.getElementById("btn").disabled=true;
+}
+var st;
+function onSearch(v){
+  clearTimeout(st);
+  if(v.length<3)return;
+  st=setTimeout(function(){
+    fetch("https://nominatim.openstreetmap.org/search?q="+encodeURIComponent(v+", India")+"&format=json&limit=1")
+      .then(r=>r.json()).then(d=>{if(d&&d[0])map.setView([+d[0].lat,+d[0].lon],13);});
+  },600);
+}
+</script>
+</body>
+</html>"""
+
+LISTENER_JS = """
+<script>
+window.addEventListener("message", function(e) {
+    if (!e.data || e.data.type !== "flood_polygon") return;
+    var tb = document.querySelector("#drawn-geojson textarea");
+    if (!tb) return;
+    var nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value").set;
+    nativeInputValueSetter.call(tb, e.data.data);
+    tb.dispatchEvent(new Event("input", {bubbles: true}));
+    tb.dispatchEvent(new Event("change", {bubbles: true}));
+});
+</script>
+"""
+
 EXAMPLES_HTML = (
     "<div style='margin-top:12px;'>"
-    "<p style='font-size:12px;font-weight:600;margin-bottom:8px;font-family:sans-serif;color:#444;'>💡 Try these examples — click to load</p>"
+    "<p style='font-size:12px;font-weight:600;margin-bottom:8px;font-family:sans-serif;color:#444;'>💡 Try these examples</p>"
     "<div style='display:grid;grid-template-columns:1fr 1fr;gap:8px;'>"
     "<button onclick='var t=document.querySelectorAll(\"textarea\")[0];t.value=\"Is Koregaon Park in Pune safe for a residential complex?\";t.dispatchEvent(new InputEvent(\"input\",{bubbles:true}));t.dispatchEvent(new Event(\"change\",{bubbles:true}));'"
     " style='background:#f0f7ff;border:2px solid #1565c0;border-radius:8px;padding:10px 12px;cursor:pointer;font-size:12px;font-family:sans-serif;text-align:left;width:100%;'>"
@@ -364,18 +479,18 @@ EXAMPLES_HTML = (
 )
 
 CSS = ".gradio-container { background: #f0f4f8 !important; font-family: 'Segoe UI', sans-serif !important; } footer { display: none !important; }"
-SEASON_INFO = "Adjusts risk score based on typical Indian rainfall patterns. Monsoon = worst case. This is a modelled estimate, not measured rainfall data."
+SEASON_INFO = "Adjusts risk score based on typical Indian rainfall patterns. Monsoon = worst case. Modelled estimate, not measured data."
 
 DISCLAIMER = (
     "<div style='margin-top:12px;font-family:sans-serif;'>"
     "<div style='background:#fff8e1;border:1.5px solid #f9a825;border-radius:8px;padding:10px 14px;margin-bottom:10px;'>"
     "<p style='font-size:11px;color:#555;margin:0;line-height:1.6;'>⚠️ <strong style='color:#333;'>Indicative assessment only.</strong> "
-    "Results are based on 30m resolution DEM and modelled seasonal scenarios — not measured rainfall or hydrodynamic simulation. "
-    "For detailed site-specific flood risk analysis, consult a certified specialist.</p></div>"
+    "Results are based on 30m DEM and modelled seasonal scenarios — not measured rainfall or hydrodynamic simulation. "
+    "For detailed site-specific analysis, consult a certified specialist.</p></div>"
     "<div style='background:white;border:2px solid #0d47a1;border-radius:10px;padding:12px 16px;display:flex;align-items:center;gap:14px;'>"
     f"<img src='{URISK_LOGO}' style='height:40px;object-fit:contain;flex-shrink:0;' alt='uRisk'/>"
     "<div><p style='margin:0;font-size:13px;font-weight:700;color:#0d47a1;'>Need a detailed analysis?</p>"
-    "<p style='margin:3px 0 0;font-size:12px;color:#555;'>uRisk Consulting provides certified geospatial flood risk assessments.</p>"
+    "<p style='margin:3px 0 0;font-size:12px;color:#555;'>uRisk Consulting — certified geospatial flood risk assessments.</p>"
     "<a href='https://www.linkedin.com/company/urisk-consulting/' target='_blank' "
     "style='font-size:12px;color:#1565c0;font-weight:600;text-decoration:none;'>→ Contact uRisk on LinkedIn</a>"
     "</div></div></div>"
@@ -386,13 +501,14 @@ HEADER = (
     "display:flex;justify-content:space-between;align-items:center;'>"
     "<div><h1 style='color:white;margin:0;font-size:22px;font-weight:700;'>🌊 Flood Risk Agent — Indian Construction Sites</h1>"
     "<p style='color:#bbdefb;margin:4px 0 0;font-size:13px;'>Powered by Llama 3 &nbsp;·&nbsp; ALOS DEM (30m) &nbsp;·&nbsp; OpenStreetMap</p></div>"
-    f"<div style='background:white;padding:8px 14px;border-radius:10px;text-align:center;'>"
-    f"<img src='{URISK_LOGO}' style='height:48px;object-fit:contain;' alt='uRisk Consulting'/></div></div>"
+    f"<div style='background:white;padding:8px 14px;border-radius:10px;'>"
+    f"<img src='{URISK_LOGO}' style='height:48px;object-fit:contain;' alt='uRisk'/></div></div>"
 )
 
 with gr.Blocks(title="Flood Risk Agent") as app:
 
     gr.HTML(HEADER)
+    gr.HTML(LISTENER_JS)
 
     with gr.Tabs():
 
@@ -413,27 +529,30 @@ with gr.Blocks(title="Flood Risk Agent") as app:
             submit_btn.click(fn=analyse_location, inputs=[query_input, season_input],
                              outputs=[report_output, map_output, location_info], api_name=False)
 
-        with gr.Tab("📍 Search by Coordinates"):
+        with gr.Tab("✏️ Draw Site on Map"):
+            gr.HTML("<p style='font-family:sans-serif;font-size:13px;color:#555;margin:8px 0;'>Search for your site location, then use the polygon tool to draw your exact site boundary (max 25 km²).</p>")
             with gr.Row(equal_height=True):
                 with gr.Column(scale=1, min_width=320):
-                    lat_input = gr.Number(label="Latitude", value=19.0549, precision=6)
-                    lon_input = gr.Number(label="Longitude", value=72.8402, precision=6)
-                    radius_input = gr.Slider(minimum=100, maximum=5000, value=1000, step=100, label="Analysis radius (metres)")
+                    gr.HTML(DRAW_WIDGET_HTML)
+                    drawn_geojson = gr.Textbox(label="", visible=False, elem_id="drawn-geojson")
                     season_input_2 = gr.Radio(choices=list(SEASON_MULTIPLIERS.keys()),
                         value="🌧️ Monsoon (Jun–Sep)", label="🗓️ Seasonal Risk Scenario", info=SEASON_INFO)
-                    submit_btn_2 = gr.Button("🔍 Analyse Coordinates", variant="primary")
-                    location_info_2 = gr.Textbox(label="📍 Location", interactive=False, lines=1)
+                    submit_btn_2 = gr.Button("🔍 Analyse Drawn Site", variant="primary")
+                    location_info_2 = gr.Textbox(label="📍 Site Location", interactive=False, lines=1)
                     report_output_2 = gr.Textbox(label="🤖 AI Flood Risk Report", lines=5, interactive=False)
                 with gr.Column(scale=2, min_width=500):
                     map_output_2 = gr.Plot()
                     gr.HTML(DISCLAIMER)
-            submit_btn_2.click(fn=analyse_from_coords, inputs=[lat_input, lon_input, radius_input, season_input_2],
+            submit_btn_2.click(fn=analyse_from_drawn, inputs=[drawn_geojson, season_input_2],
                                outputs=[report_output_2, map_output_2, location_info_2], api_name=False)
+            drawn_geojson.change(fn=lambda x: gr.update(interactive=bool(x and x.strip())),
+                                 inputs=[drawn_geojson], outputs=[submit_btn_2])
 
-        with gr.Tab("🗺️ Upload Site Polygon"):
+        with gr.Tab("📁 Upload Site Polygon"):
+            gr.HTML("<p style='font-family:sans-serif;font-size:13px;color:#555;margin:8px 0;'>Upload a GeoJSON file of your site boundary (max 25 km², max 500KB).</p>")
             with gr.Row(equal_height=True):
                 with gr.Column(scale=1, min_width=320):
-                    geojson_input = gr.File(label="Upload GeoJSON polygon (.geojson or .json)", file_types=[".geojson", ".json"])
+                    geojson_input = gr.File(label="Upload GeoJSON (.geojson or .json)", file_types=[".geojson",".json"])
                     season_input_3 = gr.Radio(choices=list(SEASON_MULTIPLIERS.keys()),
                         value="🌧️ Monsoon (Jun–Sep)", label="🗓️ Seasonal Risk Scenario", info=SEASON_INFO)
                     submit_btn_3 = gr.Button("🔍 Analyse Polygon", variant="primary")

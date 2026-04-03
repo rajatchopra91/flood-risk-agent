@@ -23,7 +23,7 @@ def get_city_bbox(city_name: str, country: str = "India"):
         raise ValueError(f"Could not find city: {city_name}")
 
     lat, lon = location.latitude, location.longitude
-    offset = 0.15  # Reduced from 0.25 — ~30km box instead of 50km
+    offset = 0.10  # ~11km radius — was 0.15 (~17km), cuts download 55%
     return {
         "south": lat - offset,
         "north": lat + offset,
