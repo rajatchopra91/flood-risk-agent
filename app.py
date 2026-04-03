@@ -9,31 +9,45 @@ from dem_downloader import precache_cities
 import plotly.graph_objects as go
 
 def ensure_dems():
-    """Re-download DEMs from HF Space repo if missing after rebuild."""
-    from huggingface_hub import hf_hub_download, list_repo_files
+    """Restore DEMs from HF Space repo storage."""
     import os
+    from huggingface_hub import hf_hub_download
     token = os.getenv("HF_TOKEN")
     if not token:
+        print("No HF_TOKEN found, skipping DEM restore")
         return
-    try:
-        files = list_repo_files("rajatchopra91/flood-risk-agent", 
-                                repo_type="space", token=token)
-        dem_files = [f for f in files if f.startswith("data/dem/") and f.endswith(".tif")]
-        os.makedirs("data/dem", exist_ok=True)
-        for f in dem_files:
-            local_path = f
-            if not os.path.exists(local_path):
+    os.makedirs("data/dem", exist_ok=True)
+    # List of known DEM files to restore
+    dem_files = [
+        "mumbai_dem.tif", "delhi_dem.tif", "bangalore_dem.tif",
+        "pune_dem.tif", "hyderabad_dem.tif", "chennai_dem.tif",
+        "kolkata_dem.tif", "ahmedabad_dem.tif", "jaipur_dem.tif",
+        "lucknow_dem.tif", "surat_dem.tif", "bhopal_dem.tif",
+        "patna_dem.tif", "nagpur_dem.tif", "indore_dem.tif",
+        "noida_dem.tif", "bandra_dem.tif", "bhagalpur_dem.tif",
+        "sirsa_dem.tif", "haridwar_dem.tif", "dehradun_dem.tif",
+        "srinagar_dem.tif", "thane_dem.tif", "whitefield_dem.tif",
+        "koregaon_park_dem.tif"
+    ]
+    restored = 0
+    for f in dem_files:
+        local_path = f"data/dem/{f}"
+        if not os.path.exists(local_path):
+            try:
                 print(f"Restoring {f}...")
                 hf_hub_download(
                     repo_id="rajatchopra91/flood-risk-agent",
                     repo_type="space",
-                    filename=f,
+                    filename=f"data/dem/{f}",
                     local_dir=".",
                     token=token
                 )
-        print(f"DEMs ready: {len(dem_files)} files")
-    except Exception as e:
-        print(f"DEM restore warning: {e}")
+                restored += 1
+            except Exception as e:
+                print(f"Could not restore {f}: {e}")
+        else:
+            restored += 1
+    print(f"DEMs ready: {restored}/{len(dem_files)} files")
 
 
 
