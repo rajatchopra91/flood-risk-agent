@@ -310,6 +310,58 @@ def analyse_from_polygon(geojson_file, season: str, progress=gr.Progress()):
         return f"Error: {str(e)}", None, "Error in analysis."
 
 
+def default_india_map() -> go.Figure:
+    """Default India overview map shown before any analysis."""
+    # Pre-cached city coordinates for markers
+    cities = [
+        ("Mumbai", 19.076, 72.877), ("Delhi", 28.704, 77.102),
+        ("Bangalore", 12.972, 77.594), ("Hyderabad", 17.385, 78.487),
+        ("Chennai", 13.083, 80.270), ("Kolkata", 22.573, 88.364),
+        ("Pune", 18.520, 73.856), ("Ahmedabad", 23.023, 72.572),
+        ("Jaipur", 26.912, 75.787), ("Lucknow", 26.847, 80.947),
+        ("Patna", 25.594, 85.137), ("Bhagalpur", 25.244, 86.972),
+        ("Bhopal", 23.259, 77.413), ("Nagpur", 21.145, 79.088),
+        ("Surat", 21.170, 72.831), ("Indore", 22.719, 75.857),
+        ("Noida", 28.535, 77.391), ("Dehradun", 30.317, 78.032),
+        ("Haridwar", 29.945, 78.164), ("Srinagar", 34.084, 74.797),
+        ("Bandra", 19.054, 72.840), ("Whitefield", 12.969, 77.750),
+        ("Koregaon Park", 18.537, 73.893), ("Thane", 19.218, 72.978),
+        ("Sirsa", 29.533, 75.029),
+    ]
+    lats = [c[1] for c in cities]
+    lons = [c[2] for c in cities]
+    names = [c[0] for c in cities]
+
+    fig = go.Figure()
+    fig.add_trace(go.Scattermap(
+        lat=lats, lon=lons, mode="markers+text",
+        marker=dict(size=8, color="#1565c0", opacity=0.7),
+        text=names, textposition="top right",
+        textfont=dict(size=10, color="#1565c0"),
+        hovertemplate="<b>%{text}</b><br>Click Analyse Site to assess<extra></extra>",
+        name="Pre-cached cities", showlegend=False
+    ))
+
+    fig.update_layout(
+        map=dict(style="open-street-map",
+                 center=dict(lat=22.5, lon=82.0), zoom=4),
+        margin=dict(l=0, r=0, t=0, b=0),
+        height=450,
+        paper_bgcolor="#f0f4f8",
+        annotations=[dict(
+            x=0.01, y=0.99, xref="paper", yref="paper",
+            xanchor="left", yanchor="top",
+            text="<b>Pre-cached cities</b><br>Type a city name and click Analyse",
+            showarrow=False, bgcolor="white",
+            bordercolor="#1565c0", borderwidth=1.5,
+            borderpad=8, font=dict(size=11)
+        )]
+    )
+    return fig
+
+
+DEFAULT_MAP = default_india_map()
+
 EXAMPLES_HTML = (
     "<div style='margin-top:12px;'>"
     "<p style='font-size:12px;font-weight:600;margin-bottom:8px;font-family:sans-serif;color:#444;'>💡 Try these examples</p>"
@@ -376,7 +428,7 @@ with gr.Blocks(title="Flood Risk Agent") as app:
                     location_info = gr.Textbox(label="📍 Location Identified", interactive=False, lines=1)
                     report_output = gr.Textbox(label="🤖 AI Flood Risk Report", lines=5, interactive=False)
                 with gr.Column(scale=2, min_width=500):
-                    map_output = gr.Plot()
+                    map_output = gr.Plot(value=DEFAULT_MAP)
                     gr.HTML(EXAMPLES_HTML)
                     gr.HTML(DISCLAIMER)
             submit_btn.click(fn=analyse_location, inputs=[query_input, season_input],
@@ -393,7 +445,7 @@ with gr.Blocks(title="Flood Risk Agent") as app:
                     location_info_3 = gr.Textbox(label="📍 Site Info", interactive=False, lines=1)
                     report_output_3 = gr.Textbox(label="🤖 AI Flood Risk Report", lines=5, interactive=False)
                 with gr.Column(scale=2, min_width=500):
-                    map_output_3 = gr.Plot()
+                    map_output_3 = gr.Plot(value=DEFAULT_MAP)
                     gr.HTML(DISCLAIMER)
             submit_btn_3.click(fn=analyse_from_polygon, inputs=[geojson_input, season_input_3],
                                outputs=[report_output_3, map_output_3, location_info_3], api_name=False)
