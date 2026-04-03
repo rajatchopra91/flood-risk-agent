@@ -6,4 +6,5 @@ numpy==1.26.4
 requests==2.33.1
 geopy==2.4.1
 python-dotenv==1.0.1
-shapely==2.1.2folium==0.19.0
+shapely==2.1.2
+folium==0.19.0
