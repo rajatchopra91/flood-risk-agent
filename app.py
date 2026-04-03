@@ -220,7 +220,7 @@ def generate_report(user_query: str, data: dict, season: str) -> str:
                 "Write a 3-4 sentence plain-language indicative assessment. "
                 "IMPORTANT: Always use the exact risk_level and risk_score from the data. "
                 "When mentioning season, clarify it is a modelled scenario, not measured data. "
-                "End with: For a detailed certified assessment, consult a geospatial flood risk specialist. "
+                "End with: For a detailed certified assessment, consult a flood risk specialist at uRisk. "
                 "Be specific with numbers. No bullet points."
             )},
             {"role": "user", "content": f"Query: {user_query}\nSeason: {season}\nData: {json.dumps(clean_data)}"}
@@ -398,7 +398,7 @@ DISCLAIMER = (
     "<div style='background:white;border:2px solid #0d47a1;border-radius:10px;padding:12px 16px;display:flex;align-items:center;gap:14px;'>"
     f"<img src='{URISK_LOGO}' style='height:40px;object-fit:contain;flex-shrink:0;' alt='uRisk'/>"
     "<div><p style='margin:0;font-size:13px;font-weight:700;color:#0d47a1;'>Need a detailed analysis?</p>"
-    "<p style='margin:3px 0 0;font-size:12px;color:#555;'>uRisk Consulting — certified geospatial flood risk assessments.</p>"
+    "<p style='margin:3px 0 0;font-size:12px;color:#555;'>uRisk Consulting — geospatial flood risk assessments.</p>"
     "<a href='https://www.linkedin.com/company/urisk-consulting/' target='_blank' "
     "style='font-size:12px;color:#1565c0;font-weight:600;text-decoration:none;'>→ Contact uRisk on LinkedIn</a>"
     "</div></div></div>"
