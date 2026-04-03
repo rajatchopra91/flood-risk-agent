@@ -6,7 +6,7 @@ from tools import full_site_analysis
 from groq import Groq
 from dotenv import load_dotenv
 from dem_downloader import precache_cities
-import folium
+import plotly.graph_objects as go
 
 load_dotenv()
 precache_cities()
@@ -41,111 +41,76 @@ def get_osm_boundary(place_name: str):
     return None
 
 
-def render_map(path: str) -> str:
-    try:
-        with open(path, "r") as f:
-            content = f.read()
-        # Extract just the body content from Folium's full HTML
-        import re
-        body_match = re.search(r'<body[^>]*>(.*?)</body>', content, re.DOTALL)
-        if body_match:
-            body = body_match.group(1)
-            # Also extract styles and scripts from head
-            styles = re.findall(r'<link[^>]+stylesheet[^>]+>', content)
-            scripts = re.findall(r'<script[^>]*>.*?</script>', content, re.DOTALL)
-            style_tags = '\n'.join(styles)
-            script_tags = '\n'.join(scripts)
-            return f'<div style="height:400px;width:100%;">{style_tags}{body}{script_tags}</div>'
-        return content
-    except Exception as e:
-        return f"<p style='color:red;'>Map error: {str(e)}</p>"
-
-
-def make_popup(place_name, risk_level, score, season, elevation, catchment, color, note=""):
-    note_html = f"<br><i style='font-size:10px;'>{note}</i>" if note else ""
-    return (
-        f"<div style='font-family:sans-serif;min-width:190px;'>"
-        f"<b style='font-size:14px;'>📍 {place_name}</b><br>"
-        f"<span style='background:{color};color:white;padding:2px 8px;"
-        f"border-radius:10px;font-size:11px;display:inline-block;margin:4px 0;'>"
-        f"{risk_level} Risk — {score}/100</span><br>"
-        f"<b>Season:</b> {season}<br>"
-        f"<b>🏔️ Elevation:</b> {elevation}m<br>"
-        f"<b>🌊 Catchment:</b> {catchment} km²<br>"
-        f"<b>📊 Risk Score:</b> {score}/100"
-        f"{note_html}</div>"
-    )
-
-
-def write_map_html(lat, lon, risk_level, place_name, elevation,
-                   catchment, score, season, boundary_geojson):
+def create_plotly_map(lat, lon, risk_level, place_name, elevation,
+                      catchment, score, season, boundary_geojson=None,
+                      polygon_geojson_str=None):
     risk_colors = {"High": "#c62828", "Moderate": "#e65100", "Low": "#2e7d32"}
-    folium_colors = {"High": "red", "Moderate": "orange", "Low": "green"}
     color = risk_colors.get(risk_level, "#1565c0")
-    fcolor = folium_colors.get(risk_level, "blue")
-
-    m = folium.Map(location=[lat, lon], zoom_start=12, tiles="OpenStreetMap")
-
-    if boundary_geojson:
-        folium.GeoJson(
-            json.loads(boundary_geojson),
-            style_function=lambda x: {
-                "color": color, "weight": 3,
-                "fillColor": color, "fillOpacity": 0.15,
-                "dashArray": "6,4"
-            }
-        ).add_to(m)
-        m.fit_bounds(m.get_bounds())
-
-    folium.Circle(location=[lat, lon], radius=1500,
-                  color=color, fill=True, fill_opacity=0.1, weight=2).add_to(m)
-
-    folium.Marker(
-        location=[lat, lon],
-        popup=folium.Popup(make_popup(place_name, risk_level, score, season,
-                                      elevation, catchment, color), max_width=250),
-        icon=folium.Icon(color=fcolor, icon="info-sign")
-    ).add_to(m)
-
-    os.makedirs("map_output", exist_ok=True)
-    path = "map_output/map.html"
-    m.save(path)
-    return path
-
-
-def write_map_html_with_polygon(lat, lon, risk_level, place_name, elevation,
-                                catchment, score, season, polygon_geojson_str):
-    risk_colors = {"High": "#c62828", "Moderate": "#e65100", "Low": "#2e7d32"}
-    folium_colors = {"High": "red", "Moderate": "orange", "Low": "green"}
-    color = risk_colors.get(risk_level, "#1565c0")
-    fcolor = folium_colors.get(risk_level, "blue")
-
-    m = folium.Map(location=[lat, lon], zoom_start=13, tiles="OpenStreetMap")
-
-    folium.GeoJson(
-        json.loads(polygon_geojson_str),
-        style_function=lambda x: {
-            "color": "#1565c0", "weight": 3,
-            "fillColor": "#1565c0", "fillOpacity": 0.2
-        }
-    ).add_to(m)
-
-    folium.Circle(location=[lat, lon], radius=300,
-                  color=color, fill=True, fill_opacity=0.15, weight=2).add_to(m)
-
     elev_str = f"{elevation:.1f}" if isinstance(elevation, float) else str(elevation)
-    folium.Marker(
-        location=[lat, lon],
-        popup=folium.Popup(make_popup("Site centroid", risk_level, score, season,
-                                      elev_str, catchment, color, "DEM clipped to polygon"), max_width=250),
-        icon=folium.Icon(color=fcolor, icon="info-sign")
-    ).add_to(m)
 
-    m.fit_bounds(m.get_bounds())
-    os.makedirs("map_output", exist_ok=True)
-    path = "map_output/map.html"
-    m.save(path)
-    return path
+    fig = go.Figure()
+
+    # Administrative boundary
+    if boundary_geojson:
+        try:
+            geom = json.loads(boundary_geojson)
+            geom_type = geom.get("type", "")
+            coords_list = []
+            if geom_type == "Polygon":
+                coords_list = [geom["coordinates"][0]]
+            elif geom_type == "MultiPolygon":
+                coords_list = [p[0] for p in geom["coordinates"]]
+            for coords in coords_list:
+                lons = [c[0] for c in coords]
+                lats = [c[1] for c in coords]
+                fig.add_trace(go.Scattermap(
+                    lon=lons, lat=lats, mode="lines",
+                    line=dict(color=color, width=2.5),
+                    fill="toself",
+                    fillcolor=f"rgba({int(color[1:3], 16)},{int(color[3:5], 16)},{int(color[5:7], 16)},0.15)",
+                    name="Boundary", showlegend=False, hoverinfo="skip"
+                ))
+        except Exception:
+            pass
+
+    # Site polygon (for polygon tab)
+    if polygon_geojson_str:
+        try:
+            geom = json.loads(polygon_geojson_str)
+            coords = geom.get("coordinates", [[]])[0]
+            lons = [c[0] for c in coords]
+            lats = [c[1] for c in coords]
+            fig.add_trace(go.Scattermap(
+                lon=lons, lat=lats, mode="lines",
+                line=dict(color="#1565c0", width=2.5),
+                fill="toself",
+                fillcolor="rgba(21,101,192,0.2)",
+                name="Site polygon", showlegend=False, hoverinfo="skip"
+            ))
+        except Exception:
+            pass
+
+    # Site marker
+    fig.add_trace(go.Scattermap(
+        lon=[lon], lat=[lat],
+        mode="markers",
+        marker=dict(size=14, color=color, symbol="circle"),
+        text=[f"<b>{place_name}</b><br>{risk_level} Risk — {score}/100<br>Elevation: {elev_str}m<br>Catchment: {catchment} km²<br>Season: {season}"],
+        hoverinfo="text",
+        name=place_name, showlegend=False
+    ))
+
+    fig.update_layout(
+        map=dict(
+            style="open-street-map",
+            center=dict(lat=lat, lon=lon),
+            zoom=11
+        ),
+        margin=dict(l=0, r=0, t=0, b=0),
+        height=450,
+        paper_bgcolor="#f0f4f8"
+    )
+    return fig
 
 
 def extract_location(user_query: str) -> str:
@@ -211,7 +176,7 @@ def get_elevation_display(data: dict) -> float:
 
 def analyse_location(user_query: str, season: str, progress=gr.Progress()):
     if not user_query.strip():
-        return "Please enter a question.", "", "No location identified."
+        return "Please enter a question.", None, "No location identified."
     try:
         progress(0.1, desc="🔍 Extracting location...")
         location = extract_location(user_query)
@@ -227,12 +192,13 @@ def analyse_location(user_query: str, season: str, progress=gr.Progress()):
         report = generate_report(user_query, data, season)
         progress(0.9, desc="🗺️ Rendering map...")
         boundary = get_osm_boundary(location)
-        path = write_map_html(lat, lon, data["risk"]["risk_level"], location,
-                              elevation, catchment, data["risk"]["risk_score"], season, boundary)
+        fig = create_plotly_map(lat, lon, data["risk"]["risk_level"], location,
+                                elevation, catchment, data["risk"]["risk_score"],
+                                season, boundary_geojson=boundary)
         progress(1.0, desc="✅ Done!")
-        return report, render_map(path), f"📍 {display_name}"
+        return report, fig, f"📍 {display_name}"
     except Exception as e:
-        return f"Error: {str(e)}", "<p style='color:red;padding:20px;'>Map could not be loaded.</p>", "Error."
+        return f"Error: {str(e)}", None, "Error."
 
 
 def analyse_from_coords(lat: float, lon: float, radius_m: float, season: str, progress=gr.Progress()):
@@ -247,23 +213,23 @@ def analyse_from_coords(lat: float, lon: float, radius_m: float, season: str, pr
         progress(0.8, desc="🤖 Generating report...")
         report = generate_report(f"Flood risk at {lat}, {lon}", data, season)
         progress(0.9, desc="🗺️ Rendering map...")
-        path = write_map_html(lat, lon, data["risk"]["risk_level"],
-                              f"Site ({lat:.4f}, {lon:.4f})",
-                              elevation, catchment, data["risk"]["risk_score"], season, None)
+        fig = create_plotly_map(lat, lon, data["risk"]["risk_level"],
+                                f"Site ({lat:.4f}, {lon:.4f})",
+                                elevation, catchment, data["risk"]["risk_score"], season)
         progress(1.0, desc="✅ Done!")
-        return report, render_map(path), f"📍 {data['coordinates']['display_name']}"
+        return report, fig, f"📍 {data['coordinates']['display_name']}"
     except Exception as e:
-        return f"Error: {str(e)}", "", "Error in analysis."
+        return f"Error: {str(e)}", None, "Error in analysis."
 
 
 def analyse_from_polygon(geojson_file, season: str, progress=gr.Progress()):
     if geojson_file is None:
-        return "Please upload a GeoJSON file.", "", "No file uploaded."
+        return "Please upload a GeoJSON file.", None, "No file uploaded."
     try:
         progress(0.1, desc="📂 Reading polygon...")
         file_size_kb = os.path.getsize(geojson_file.name) / 1024
         if file_size_kb > 500:
-            return f"File too large ({file_size_kb:.0f}KB). Please upload under 500KB.", "", "File too large."
+            return f"File too large ({file_size_kb:.0f}KB). Please upload under 500KB.", None, "File too large."
         with open(geojson_file.name, "r") as f:
             geojson = json.load(f)
         progress(0.3, desc="🛰️ Downloading & clipping DEM to polygon...")
@@ -284,12 +250,13 @@ def analyse_from_polygon(geojson_file, season: str, progress=gr.Progress()):
             polygon_geojson = json.dumps(raw_geojson["geometry"])
         else:
             polygon_geojson = json.dumps(raw_geojson)
-        path = write_map_html_with_polygon(lat, lon, data["risk"]["risk_level"], "Uploaded Site",
-                                           elevation, catchment, data["risk"]["risk_score"], season, polygon_geojson)
+        fig = create_plotly_map(lat, lon, data["risk"]["risk_level"], "Uploaded Site",
+                                elevation, catchment, data["risk"]["risk_score"],
+                                season, polygon_geojson_str=polygon_geojson)
         progress(1.0, desc="✅ Done!")
-        return report, render_map(path), f"📍 {data['coordinates']['display_name']}"
+        return report, fig, f"📍 {data['coordinates']['display_name']}"
     except Exception as e:
-        return f"Error: {str(e)}", "", "Error in analysis."
+        return f"Error: {str(e)}", None, "Error in analysis."
 
 
 EXAMPLES_HTML = (
@@ -316,6 +283,7 @@ EXAMPLES_HTML = (
 )
 
 CSS = ".gradio-container { background: #f0f4f8 !important; font-family: 'Segoe UI', sans-serif !important; } footer { display: none !important; }"
+SEASON_INFO = "Adjusts risk score based on typical Indian rainfall patterns. Monsoon = worst case. This is a modelled estimate, not measured rainfall data."
 
 DISCLAIMER = (
     "<div style='margin-top:12px;font-family:sans-serif;'>"
@@ -324,7 +292,7 @@ DISCLAIMER = (
     "Results are based on 30m resolution DEM and modelled seasonal scenarios — not measured rainfall or hydrodynamic simulation. "
     "For detailed site-specific flood risk analysis, consult a certified specialist.</p></div>"
     "<div style='background:white;border:2px solid #0d47a1;border-radius:10px;padding:12px 16px;display:flex;align-items:center;gap:14px;'>"
-    "<img src='" + URISK_LOGO + "' style='height:40px;object-fit:contain;flex-shrink:0;' alt='uRisk'/>"
+    f"<img src='{URISK_LOGO}' style='height:40px;object-fit:contain;flex-shrink:0;' alt='uRisk'/>"
     "<div><p style='margin:0;font-size:13px;font-weight:700;color:#0d47a1;'>Need a detailed analysis?</p>"
     "<p style='margin:3px 0 0;font-size:12px;color:#555;'>uRisk Consulting provides certified geospatial flood risk assessments.</p>"
     "<a href='https://www.linkedin.com/company/urisk-consulting/' target='_blank' "
@@ -337,12 +305,9 @@ HEADER = (
     "display:flex;justify-content:space-between;align-items:center;'>"
     "<div><h1 style='color:white;margin:0;font-size:22px;font-weight:700;'>🌊 Flood Risk Agent — Indian Construction Sites</h1>"
     "<p style='color:#bbdefb;margin:4px 0 0;font-size:13px;'>Powered by Llama 3 &nbsp;·&nbsp; ALOS DEM (30m) &nbsp;·&nbsp; OpenStreetMap</p></div>"
-    "<div style='background:white;padding:8px 14px;border-radius:10px;text-align:center;'>"
-    "<img src='" + URISK_LOGO + "' style='height:48px;object-fit:contain;' alt='uRisk Consulting'/></div></div>"
+    f"<div style='background:white;padding:8px 14px;border-radius:10px;text-align:center;'>"
+    f"<img src='{URISK_LOGO}' style='height:48px;object-fit:contain;' alt='uRisk Consulting'/></div></div>"
 )
-
-MAP_PLACEHOLDER = "<div style='height:400px;background:#e8edf2;border-radius:10px;display:flex;align-items:center;justify-content:center;color:#666;font-size:14px;'>🗺️ Map will appear here after analysis</div>"
-SEASON_INFO = "Adjusts risk score based on typical Indian rainfall patterns. Monsoon = worst case. This is a modelled estimate, not measured rainfall data."
 
 with gr.Blocks(title="Flood Risk Agent") as app:
 
@@ -361,7 +326,7 @@ with gr.Blocks(title="Flood Risk Agent") as app:
                     location_info = gr.Textbox(label="📍 Location Identified", interactive=False, lines=1)
                     report_output = gr.Textbox(label="🤖 AI Flood Risk Report", lines=5, interactive=False)
                 with gr.Column(scale=2, min_width=500):
-                    map_output = gr.HTML(value=MAP_PLACEHOLDER)
+                    map_output = gr.Plot()
                     gr.HTML(EXAMPLES_HTML)
                     gr.HTML(DISCLAIMER)
             submit_btn.click(fn=analyse_location, inputs=[query_input, season_input],
@@ -379,7 +344,7 @@ with gr.Blocks(title="Flood Risk Agent") as app:
                     location_info_2 = gr.Textbox(label="📍 Location", interactive=False, lines=1)
                     report_output_2 = gr.Textbox(label="🤖 AI Flood Risk Report", lines=5, interactive=False)
                 with gr.Column(scale=2, min_width=500):
-                    map_output_2 = gr.HTML(value=MAP_PLACEHOLDER)
+                    map_output_2 = gr.Plot()
                     gr.HTML(DISCLAIMER)
             submit_btn_2.click(fn=analyse_from_coords, inputs=[lat_input, lon_input, radius_input, season_input_2],
                                outputs=[report_output_2, map_output_2, location_info_2], api_name=False)
@@ -394,7 +359,7 @@ with gr.Blocks(title="Flood Risk Agent") as app:
                     location_info_3 = gr.Textbox(label="📍 Site Info", interactive=False, lines=1)
                     report_output_3 = gr.Textbox(label="🤖 AI Flood Risk Report", lines=5, interactive=False)
                 with gr.Column(scale=2, min_width=500):
-                    map_output_3 = gr.HTML(value=MAP_PLACEHOLDER)
+                    map_output_3 = gr.Plot()
                     gr.HTML(DISCLAIMER)
             submit_btn_3.click(fn=analyse_from_polygon, inputs=[geojson_input, season_input_3],
                                outputs=[report_output_3, map_output_3, location_info_3], api_name=False)
