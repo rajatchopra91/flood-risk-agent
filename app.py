@@ -53,7 +53,7 @@ def ensure_dems():
 
 load_dotenv()
 ensure_dems()
-precache_cities()
+# precache_cities() disabled on HF Spaces — DEMs restored from storage instead
 
 SEASON_MULTIPLIERS = {
     "🌧️ Monsoon (Jun–Sep)": 1.6,
