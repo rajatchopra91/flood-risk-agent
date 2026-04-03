@@ -1,5 +1,6 @@
 import os
 import requests
+import datetime 
 from geopy.geocoders import Nominatim
 from dotenv import load_dotenv
 
@@ -67,10 +68,11 @@ def download_dem(city_name: str, output_dir: str = "data/dem"):
         return output_path, bbox
     else:
         raise Exception(f"Download failed: {response.status_code} - {response.text}")
+import datetime  # Add this import at the top
+
 def download_dem_for_bbox(bbox: dict, name: str, output_dir: str = "data/dem"):
-    """Download DEM for an explicit bounding box."""
     os.makedirs(output_dir, exist_ok=True)
-    output_path = f"{output_dir}/{name.replace(' ', '_')}_dem.tif"
+    output_path = f"{output_dir}/{name.replace(' ', '_').lower()}_dem.tif"
 
     if os.path.exists(output_path):
         return output_path, bbox
@@ -88,14 +90,26 @@ def download_dem_for_bbox(bbox: dict, name: str, output_dir: str = "data/dem"):
     }
 
     response = requests.get(url, params=params, stream=True, timeout=60)
+    
+    # --- ADD THIS BLOCK ---
+    remaining = response.headers.get("X-RateLimit-Remaining")
+    reset_unix = response.headers.get("X-RateLimit-Reset")
+    
+    if reset_unix:
+        reset_date = datetime.datetime.fromtimestamp(int(reset_unix)).strftime('%Y-%m-%d %H:%M:%S')
+        print(f"Quota: {remaining} left. Next reset at: {reset_date}")
+
     if response.status_code == 200:
         with open(output_path, "wb") as f:
             for chunk in response.iter_content(chunk_size=8192):
                 f.write(chunk)
-        print(f"DEM saved: {output_path}")
         return output_path, bbox
+    elif response.status_code == 429:
+        # Specific error for Rate Limiting
+        raise Exception(f"API Limit Reached (50/day). Next slot opens at: {reset_date}")
     else:
         raise Exception(f"Download failed: {response.status_code} - {response.text}")
+    # ----------------------
 
 def precache_cities():
     """Pre-download DEMs for top Indian cities in background threads."""
