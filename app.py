@@ -352,7 +352,7 @@ def default_india_map() -> go.Figure:
         annotations=[dict(
             x=0.01, y=0.99, xref="paper", yref="paper",
             xanchor="left", yanchor="top",
-            text="<b>Pre-cached cities</b><br>Type a city name and click Analyse",
+            text="<b>Pre-cached cities</b><br>Type a city name with a query and click Analyse site",
             showarrow=False, bgcolor="white",
             bordercolor="#1565c0", borderwidth=1.5,
             borderpad=8, font=dict(size=11)
@@ -407,11 +407,12 @@ DISCLAIMER = (
 HEADER = (
     "<div style='background:linear-gradient(135deg,#1565c0,#0d47a1);padding:16px 24px;border-radius:12px;margin-bottom:12px;"
     "display:flex;justify-content:space-between;align-items:center;'>"
-    "<div><h1 style='color:white;margin:0;font-size:22px;font-weight:700;'>🌊 Flood Risk Agent — Indian Construction Sites</h1>"
+    "<div><h1 style='color:white;margin:0;font-size:22px;font-weight:700;'>🌊 Flood Risk Agent — Analyze any site for Risk Score</h1>"
     "<p style='color:#bbdefb;margin:4px 0 0;font-size:13px;'>Powered by Llama 3 &nbsp;·&nbsp; ALOS DEM (30m) &nbsp;·&nbsp; OpenStreetMap</p></div>"
     f"<div style='background:white;padding:8px 14px;border-radius:10px;'>"
     f"<img src='{URISK_LOGO}' style='height:48px;object-fit:contain;' alt='uRisk'/></div></div>"
 )
+
 
 with gr.Blocks(title="Flood Risk Agent") as app:
 
@@ -429,7 +430,7 @@ with gr.Blocks(title="Flood Risk Agent") as app:
                     location_info = gr.Textbox(label="📍 Location Identified", interactive=False, lines=1)
                     report_output = gr.Textbox(label="🤖 AI Flood Risk Report", lines=5, interactive=False)
                 with gr.Column(scale=2, min_width=500):
-                    map_output = gr.Plot(value=DEFAULT_MAP)
+                    map_output = gr.Plot(value=DEFAULT_MAP,show_label=False)
                     gr.HTML(EXAMPLES_HTML)
                     gr.HTML(DISCLAIMER)
             submit_btn.click(fn=analyse_location, inputs=[query_input, season_input],
@@ -446,7 +447,7 @@ with gr.Blocks(title="Flood Risk Agent") as app:
                     location_info_3 = gr.Textbox(label="📍 Site Info", interactive=False, lines=1)
                     report_output_3 = gr.Textbox(label="🤖 AI Flood Risk Report", lines=5, interactive=False)
                 with gr.Column(scale=2, min_width=500):
-                    map_output_3 = gr.Plot(value=DEFAULT_MAP)
+                    map_output_3 = gr.Plot(value=DEFAULT_MAP,show_label=False)
                     gr.HTML(EXAMPLES_HTML)
                     gr.HTML(DISCLAIMER)
             submit_btn_3.click(fn=analyse_from_polygon, inputs=[geojson_input, season_input_3],
