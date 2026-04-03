@@ -3,3 +3,9 @@ venv/
 data/
 __pycache__/
 *.tif
+.DS_Store.DS_Store
+data/
+map_output/
+venv/
+__pycache__/
+*.tif
