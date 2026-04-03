@@ -190,7 +190,16 @@ def extract_location(user_query: str) -> str:
     extraction = client.chat.completions.create(
         model="llama-3.1-8b-instant",
         messages=[
-            {"role": "system", "content": "Extract the location name from the text. Reply with ONLY the place name, no other words. Never explain, never refuse, just output the place name."},
+            {"role": "system", "content": (
+                "You are a location extractor. Your only job is to extract the city or place name from text. "
+                "Output ONLY the place name — nothing else. No sentences, no explanations. "
+                "Examples:\n"
+                "Input: 'Is Bhagalpur safe for a data center?' → Output: Bhagalpur\n"
+                "Input: 'flood risk in Bandra Mumbai' → Output: Bandra, Mumbai\n"
+                "Input: 'Should I build in Whitefield Bangalore?' → Output: Whitefield, Bangalore\n"
+                "Input: 'Is Koregaon Park in Pune safe?' → Output: Koregaon Park, Pune\n"
+                "Never refuse. Always output just the place name."
+            )},
             {"role": "user", "content": user_query}
         ],
         temperature=0.0
