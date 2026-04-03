@@ -1,11 +1,11 @@
 .env
 venv/
-data/
+
 __pycache__/
-*.tif
-.DS_Store.DS_Store
-data/
+
+.DS_Store
+
 map_output/
 venv/
 __pycache__/
-*.tif
+
