@@ -8,7 +8,37 @@ from dotenv import load_dotenv
 from dem_downloader import precache_cities
 import plotly.graph_objects as go
 
+def ensure_dems():
+    """Re-download DEMs from HF Space repo if missing after rebuild."""
+    from huggingface_hub import hf_hub_download, list_repo_files
+    import os
+    token = os.getenv("HF_TOKEN")
+    if not token:
+        return
+    try:
+        files = list_repo_files("rajatchopra91/flood-risk-agent", 
+                                repo_type="space", token=token)
+        dem_files = [f for f in files if f.startswith("data/dem/") and f.endswith(".tif")]
+        os.makedirs("data/dem", exist_ok=True)
+        for f in dem_files:
+            local_path = f
+            if not os.path.exists(local_path):
+                print(f"Restoring {f}...")
+                hf_hub_download(
+                    repo_id="rajatchopra91/flood-risk-agent",
+                    repo_type="space",
+                    filename=f,
+                    local_dir=".",
+                    token=token
+                )
+        print(f"DEMs ready: {len(dem_files)} files")
+    except Exception as e:
+        print(f"DEM restore warning: {e}")
+
+
+
 load_dotenv()
+ensure_dems()
 precache_cities()
 
 SEASON_MULTIPLIERS = {
