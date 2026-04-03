@@ -190,6 +190,7 @@ def extract_location(user_query: str) -> str:
                 "Input: Is Bhagalpur safe for a data center? → Output: Bhagalpur\n"
                 "Input: flood risk in Bandra Mumbai → Output: Bandra, Mumbai\n"
                 "Input: Should I build in Whitefield Bangalore? → Output: Whitefield, Bangalore\n"
+                "Input: Should I build Data Center in Sirsa? → Output: Sirsa, Haryana\n"
                 "Never refuse. Always output just the place name."
             )},
             {"role": "user", "content": user_query}
@@ -393,7 +394,7 @@ DISCLAIMER = (
     "<div style='background:#fff8e1;border:1.5px solid #f9a825;border-radius:8px;padding:10px 14px;margin-bottom:10px;'>"
     "<p style='font-size:11px;color:#555;margin:0;line-height:1.6;'>⚠️ <strong style='color:#333;'>Indicative assessment only.</strong> "
     "Results are based on 30m DEM and modelled seasonal scenarios — not measured rainfall or hydrodynamic simulation. "
-    "For detailed site-specific analysis, consult a certified specialist.</p></div>"
+    "For detailed site-specific analysis, consult a  specialist at uRISK.</p></div>"
     "<div style='background:white;border:2px solid #0d47a1;border-radius:10px;padding:12px 16px;display:flex;align-items:center;gap:14px;'>"
     f"<img src='{URISK_LOGO}' style='height:40px;object-fit:contain;flex-shrink:0;' alt='uRisk'/>"
     "<div><p style='margin:0;font-size:13px;font-weight:700;color:#0d47a1;'>Need a detailed analysis?</p>"
@@ -446,6 +447,7 @@ with gr.Blocks(title="Flood Risk Agent") as app:
                     report_output_3 = gr.Textbox(label="🤖 AI Flood Risk Report", lines=5, interactive=False)
                 with gr.Column(scale=2, min_width=500):
                     map_output_3 = gr.Plot(value=DEFAULT_MAP)
+                    gr.HTML(EXAMPLES_HTML)
                     gr.HTML(DISCLAIMER)
             submit_btn_3.click(fn=analyse_from_polygon, inputs=[geojson_input, season_input_3],
                                outputs=[report_output_3, map_output_3, location_info_3], api_name=False)
