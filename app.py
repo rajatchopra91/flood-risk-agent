@@ -310,156 +310,6 @@ def analyse_from_polygon(geojson_file, season: str, progress=gr.Progress()):
         return f"Error: {str(e)}", None, "Error in analysis."
 
 
-def analyse_from_drawn(geojson_str: str, season: str, progress=gr.Progress()):
-    """Analyse polygon drawn on the map widget."""
-    if not geojson_str or geojson_str.strip() == "":
-        return "Please draw a polygon on the map first.", None, "No polygon drawn."
-    try:
-        geojson = json.loads(geojson_str)
-        area = polygon_area_km2(geojson)
-        if area > MAX_POLYGON_KM2:
-            return f"Drawn polygon too large ({area:.1f} km²). Max {MAX_POLYGON_KM2} km². Please redraw.", None, "Polygon too large."
-        if area < 0.001:
-            return "Polygon area too small. Please draw a larger boundary.", None, "Polygon too small."
-        progress(0.2, desc="🛰️ Downloading & clipping DEM...")
-        from tools import full_site_analysis_from_polygon
-        data = full_site_analysis_from_polygon(geojson)
-        progress(0.6, desc="🌊 Analysing flood risk...")
-        data = apply_season(data, season)
-        elevation = get_elevation_display(data)
-        catchment = data["watershed"]["catchment_area_km2"]
-        lat, lon = data["coordinates"]["lat"], data["coordinates"]["lon"]
-        progress(0.8, desc="🤖 Generating report...")
-        report = generate_report(f"Flood risk for drawn site polygon ({area:.2f} km²)", data, season)
-        progress(0.9, desc="🗺️ Rendering map...")
-        raw = data.get("polygon_geojson", {})
-        if raw.get("type") == "FeatureCollection":
-            poly = json.dumps(raw["features"][0]["geometry"])
-        elif raw.get("type") == "Feature":
-            poly = json.dumps(raw["geometry"])
-        else:
-            poly = json.dumps(raw)
-        fig = create_plotly_map(lat, lon, data["risk"]["risk_level"], f"Drawn Site ({area:.1f} km²)",
-                                elevation, catchment, data["risk"]["risk_score"],
-                                season, polygon_geojson_str=poly)
-        progress(1.0, desc="✅ Done!")
-        return report, fig, f"📍 {data['coordinates']['display_name']}"
-    except Exception as e:
-        return f"Error: {str(e)}", None, "Error in analysis."
-
-
-DRAW_WIDGET_HTML = """<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8"/>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css"/>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
-<style>
-* { margin:0;padding:0;box-sizing:border-box; }
-html, body { height:100%;overflow:hidden;font-family:"Segoe UI",sans-serif;background:#f0f4f8; }
-#wrap { display:flex;flex-direction:column;height:100%; }
-#search { width:100%;padding:8px 12px;border:1.5px solid #cbd5e1;border-radius:8px;
-          font-size:13px;margin-bottom:6px;outline:none;flex-shrink:0; }
-#map { flex:1;min-height:0;border-radius:8px 8px 0 0; }
-#bar { background:white;border:1px solid #cbd5e1;border-top:none;border-radius:0 0 8px 8px;
-       padding:10px 14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;flex-shrink:0; }
-#hint { font-size:12px;color:#666;flex:1; }
-#badge { padding:3px 10px;border-radius:16px;font-size:11px;font-weight:700;display:none; }
-#badge.ok  { background:#e8f5e9;color:#2e7d32;border:1.5px solid #2e7d32; }
-#badge.warn{ background:#fff3e0;color:#e65100;border:1.5px solid #e65100; }
-#badge.bad { background:#ffebee;color:#c62828;border:1.5px solid #c62828; }
-#btn { padding:6px 16px;background:#1565c0;color:white;border:none;border-radius:8px;
-       font-size:12px;font-weight:700;cursor:pointer; }
-#btn:disabled { background:#aaa;cursor:not-allowed; }
-</style>
-</head>
-<body>
-<div id="wrap">
-<input id="search" type="text" placeholder="Search city in India to navigate map..." oninput="onSearch(this.value)"/>
-<div id="map"></div>
-<div id="bar">
-  <span id="hint">Use the polygon tool (pentagon icon) on the map to draw your site boundary</span>
-  <span id="badge">0 km²</span>
-  <button id="btn" disabled onclick="doConfirm()">Analyse Site</button>
-</div>
-</div>
-<script>
-var map = L.map("map",{zoomControl:true}).setView([20.59, 78.96], 5);
-L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{
-  attribution:"© OpenStreetMap contributors",maxZoom:18}).addTo(map);
-var drawn = new L.FeatureGroup(); map.addLayer(drawn);
-var ctrl = new L.Control.Draw({
-  edit:{featureGroup:drawn,remove:true},
-  draw:{polygon:{allowIntersection:false,shapeOptions:{color:"#1565c0",fillOpacity:0.2}},
-        polyline:false,rectangle:false,circle:false,marker:false,circlemarker:false}
-});
-map.addControl(ctrl);
-setTimeout(function(){ map.invalidateSize(); }, 300);
-setTimeout(function(){ map.invalidateSize(); }, 800);
-var geojson=null, MAX=25;
-function area(layer){
-  var ll=layer.getLatLngs()[0],a=0,n=ll.length;
-  for(var i=0;i<n;i++){var j=(i+1)%n,xi=ll[i].lng*Math.PI/180,yi=ll[i].lat*Math.PI/180,
-    xj=ll[j].lng*Math.PI/180,yj=ll[j].lat*Math.PI/180;
-    a+=(xj-xi)*(2+Math.sin(yi)+Math.sin(yj));}
-  return Math.abs(a*6371*6371/2);
-}
-function badge(km2){
-  var b=document.getElementById("badge"),btn=document.getElementById("btn"),
-      h=document.getElementById("hint");
-  b.style.display="inline-block"; b.textContent=km2.toFixed(2)+" km2";
-  if(km2>MAX){b.className="bad";btn.disabled=true;
-    h.textContent="Area too large — max 25 km2. Please redraw.";}
-  else if(km2>MAX*0.8){b.className="warn";btn.disabled=false;
-    h.textContent="Large area — analysis may take 30-60s.";}
-  else{b.className="ok";btn.disabled=false;
-    h.textContent="Site boundary ready. Click Analyse Site.";}
-}
-map.on(L.Draw.Event.CREATED,function(e){
-  drawn.clearLayers(); drawn.addLayer(e.layer);
-  geojson=e.layer.toGeoJSON(); badge(area(e.layer));
-});
-map.on(L.Draw.Event.DELETED,function(){
-  geojson=null;
-  document.getElementById("badge").style.display="none";
-  document.getElementById("btn").disabled=true;
-  document.getElementById("hint").textContent="Use the polygon tool to draw your site boundary";
-});
-function doConfirm(){
-  if(!geojson)return;
-  window.parent.postMessage({type:"flood_polygon",data:JSON.stringify(geojson)},"*");
-  document.getElementById("hint").textContent="Sent for analysis...";
-  document.getElementById("btn").disabled=true;
-}
-var st;
-function onSearch(v){
-  clearTimeout(st);
-  if(v.length<3)return;
-  st=setTimeout(function(){
-    fetch("https://nominatim.openstreetmap.org/search?q="+encodeURIComponent(v+", India")+"&format=json&limit=1")
-      .then(r=>r.json()).then(d=>{if(d&&d[0]){map.setView([+d[0].lat,+d[0].lon],13);map.invalidateSize();}});
-  },600);
-}
-</script>
-</body>
-</html>"""
-
-LISTENER_JS = """
-<script>
-window.addEventListener("message", function(e) {
-    if (!e.data || e.data.type !== "flood_polygon") return;
-    var tb = document.querySelector("#drawn-geojson textarea");
-    if (!tb) return;
-    var nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value").set;
-    nativeInputValueSetter.call(tb, e.data.data);
-    tb.dispatchEvent(new Event("input", {bubbles: true}));
-    tb.dispatchEvent(new Event("change", {bubbles: true}));
-});
-</script>
-"""
-
 EXAMPLES_HTML = (
     "<div style='margin-top:12px;'>"
     "<p style='font-size:12px;font-weight:600;margin-bottom:8px;font-family:sans-serif;color:#444;'>💡 Try these examples</p>"
@@ -513,8 +363,6 @@ HEADER = (
 with gr.Blocks(title="Flood Risk Agent") as app:
 
     gr.HTML(HEADER)
-    gr.HTML(LISTENER_JS)
-
     with gr.Tabs():
 
         with gr.Tab("Search by City"):
@@ -533,25 +381,6 @@ with gr.Blocks(title="Flood Risk Agent") as app:
                     gr.HTML(DISCLAIMER)
             submit_btn.click(fn=analyse_location, inputs=[query_input, season_input],
                              outputs=[report_output, map_output, location_info], api_name=False)
-
-        with gr.Tab("Draw Site on Map"):
-            gr.HTML("<p style='font-family:sans-serif;font-size:13px;color:#555;margin:8px 0;'>Search for your site, then use the polygon tool (pentagon icon) to draw the site boundary. Max area 25 km².</p>")
-            with gr.Row(equal_height=True):
-                with gr.Column(scale=1, min_width=320):
-                    gr.HTML(f'<div style="height:460px;overflow:hidden;border-radius:10px;">{DRAW_WIDGET_HTML}</div>')
-                    drawn_geojson = gr.Textbox(label="", visible=False, elem_id="drawn-geojson")
-                    season_input_2 = gr.Radio(choices=list(SEASON_MULTIPLIERS.keys()),
-                        value="🌧️ Monsoon (Jun–Sep)", label="🗓️ Seasonal Risk Scenario", info=SEASON_INFO)
-                    submit_btn_2 = gr.Button("🔍 Analyse Drawn Site", variant="primary")
-                    location_info_2 = gr.Textbox(label="📍 Site Location", interactive=False, lines=1)
-                    report_output_2 = gr.Textbox(label="🤖 AI Flood Risk Report", lines=5, interactive=False)
-                with gr.Column(scale=2, min_width=500):
-                    map_output_2 = gr.Plot()
-                    gr.HTML(DISCLAIMER)
-            submit_btn_2.click(fn=analyse_from_drawn, inputs=[drawn_geojson, season_input_2],
-                               outputs=[report_output_2, map_output_2, location_info_2], api_name=False)
-            drawn_geojson.change(fn=lambda x: gr.update(interactive=bool(x and x.strip())),
-                                 inputs=[drawn_geojson], outputs=[submit_btn_2])
 
         with gr.Tab("Upload Site Polygon"):
             gr.HTML("<p style='font-family:sans-serif;font-size:13px;color:#555;margin:8px 0;'>Upload a GeoJSON file of your site boundary (max 25 km², max 500KB).</p>")
