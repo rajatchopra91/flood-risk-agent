@@ -44,9 +44,21 @@ def get_osm_boundary(place_name: str):
 def render_map(path: str) -> str:
     try:
         with open(path, "r") as f:
-            return f.read()
-    except Exception:
-        return "<p style='color:red;padding:20px;'>Map could not be loaded.</p>"
+            content = f.read()
+        # Extract just the body content from Folium's full HTML
+        import re
+        body_match = re.search(r'<body[^>]*>(.*?)</body>', content, re.DOTALL)
+        if body_match:
+            body = body_match.group(1)
+            # Also extract styles and scripts from head
+            styles = re.findall(r'<link[^>]+stylesheet[^>]+>', content)
+            scripts = re.findall(r'<script[^>]*>.*?</script>', content, re.DOTALL)
+            style_tags = '\n'.join(styles)
+            script_tags = '\n'.join(scripts)
+            return f'<div style="height:400px;width:100%;">{style_tags}{body}{script_tags}</div>'
+        return content
+    except Exception as e:
+        return f"<p style='color:red;'>Map error: {str(e)}</p>"
 
 
 def make_popup(place_name, risk_level, score, season, elevation, catchment, color, note=""):
