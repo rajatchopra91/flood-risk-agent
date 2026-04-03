@@ -135,12 +135,22 @@ def create_plotly_map(lat, lon, risk_level, place_name, elevation,
             pass
 
     # Site marker
+    # Site marker with always-visible label
     fig.add_trace(go.Scattermap(
         lon=[lon], lat=[lat],
-        mode="markers",
+        mode="markers+text",
         marker=dict(size=14, color=color, symbol="circle"),
-        text=[f"<b>{place_name}</b><br>{risk_level} Risk — {score}/100<br>Elevation: {elev_str}m<br>Catchment: {catchment} km²<br>Season: {season}"],
-        hoverinfo="text",
+        text=[f"<b>{risk_level} Risk — {score}/100</b>"],
+        textposition="top right",
+        textfont=dict(size=12, color=color),
+        customdata=[[place_name, elev_str, catchment, season]],
+        hovertemplate=(
+            "<b>%{customdata[0]}</b><br>"
+            f"{risk_level} Risk — {score}/100<br>"
+            "Elevation: %{customdata[1]}m<br>"
+            "Catchment: %{customdata[2]} km²<br>"
+            "Season: %{customdata[3]}<extra></extra>"
+        ),
         name=place_name, showlegend=False
     ))
 
@@ -152,7 +162,25 @@ def create_plotly_map(lat, lon, risk_level, place_name, elevation,
         ),
         margin=dict(l=0, r=0, t=0, b=0),
         height=450,
-        paper_bgcolor="#f0f4f8"
+        paper_bgcolor="#f0f4f8",
+        annotations=[dict(
+            x=0.01, y=0.99,
+            xref="paper", yref="paper",
+            xanchor="left", yanchor="top",
+            text=(
+                f"<b>📍 {place_name}</b><br>"
+                f"<span style='color:{color}'>{risk_level} Risk — {score}/100</span><br>"
+                f"🏔️ Elevation: {elev_str}m<br>"
+                f"🌊 Catchment: {catchment} km²<br>"
+                f"🗓️ {season}"
+            ),
+            showarrow=False,
+            bgcolor="white",
+            bordercolor=color,
+            borderwidth=2,
+            borderpad=8,
+            font=dict(size=12)
+        )]
     )
     return fig
 
