@@ -358,12 +358,13 @@ DRAW_WIDGET_HTML = """<!DOCTYPE html>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
 <style>
 * { margin:0;padding:0;box-sizing:border-box; }
-body { font-family:"Segoe UI",sans-serif;background:#f0f4f8; }
+html, body { height:100%;overflow:hidden;font-family:"Segoe UI",sans-serif;background:#f0f4f8; }
+#wrap { display:flex;flex-direction:column;height:100%; }
 #search { width:100%;padding:8px 12px;border:1.5px solid #cbd5e1;border-radius:8px;
-          font-size:13px;margin-bottom:6px;outline:none; }
-#map { width:100%;height:340px;border-radius:8px 8px 0 0; }
+          font-size:13px;margin-bottom:6px;outline:none;flex-shrink:0; }
+#map { flex:1;min-height:0;border-radius:8px 8px 0 0; }
 #bar { background:white;border:1px solid #cbd5e1;border-top:none;border-radius:0 0 8px 8px;
-       padding:10px 14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap; }
+       padding:10px 14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;flex-shrink:0; }
 #hint { font-size:12px;color:#666;flex:1; }
 #badge { padding:3px 10px;border-radius:16px;font-size:11px;font-weight:700;display:none; }
 #badge.ok  { background:#e8f5e9;color:#2e7d32;border:1.5px solid #2e7d32; }
@@ -375,15 +376,17 @@ body { font-family:"Segoe UI",sans-serif;background:#f0f4f8; }
 </style>
 </head>
 <body>
+<div id="wrap">
 <input id="search" type="text" placeholder="Search city in India to navigate map..." oninput="onSearch(this.value)"/>
 <div id="map"></div>
 <div id="bar">
   <span id="hint">Use the polygon tool (pentagon icon) on the map to draw your site boundary</span>
   <span id="badge">0 km²</span>
-  <button id="btn" disabled onclick="confirm()">✓ Analyse Site</button>
+  <button id="btn" disabled onclick="doConfirm()">Analyse Site</button>
+</div>
 </div>
 <script>
-var map = L.map("map").setView([20.59, 78.96], 5);
+var map = L.map("map",{zoomControl:true}).setView([20.59, 78.96], 5);
 L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{
   attribution:"© OpenStreetMap contributors",maxZoom:18}).addTo(map);
 var drawn = new L.FeatureGroup(); map.addLayer(drawn);
@@ -393,6 +396,8 @@ var ctrl = new L.Control.Draw({
         polyline:false,rectangle:false,circle:false,marker:false,circlemarker:false}
 });
 map.addControl(ctrl);
+setTimeout(function(){ map.invalidateSize(); }, 300);
+setTimeout(function(){ map.invalidateSize(); }, 800);
 var geojson=null, MAX=25;
 function area(layer){
   var ll=layer.getLatLngs()[0],a=0,n=ll.length;
@@ -404,11 +409,11 @@ function area(layer){
 function badge(km2){
   var b=document.getElementById("badge"),btn=document.getElementById("btn"),
       h=document.getElementById("hint");
-  b.style.display="inline-block"; b.textContent=km2.toFixed(2)+" km²";
+  b.style.display="inline-block"; b.textContent=km2.toFixed(2)+" km2";
   if(km2>MAX){b.className="bad";btn.disabled=true;
-    h.textContent="Area too large — max 25 km². Please redraw a smaller boundary.";}
+    h.textContent="Area too large — max 25 km2. Please redraw.";}
   else if(km2>MAX*0.8){b.className="warn";btn.disabled=false;
-    h.textContent="Large area — analysis may take 30–60s.";}
+    h.textContent="Large area — analysis may take 30-60s.";}
   else{b.className="ok";btn.disabled=false;
     h.textContent="Site boundary ready. Click Analyse Site.";}
 }
@@ -422,10 +427,10 @@ map.on(L.Draw.Event.DELETED,function(){
   document.getElementById("btn").disabled=true;
   document.getElementById("hint").textContent="Use the polygon tool to draw your site boundary";
 });
-function confirm(){
+function doConfirm(){
   if(!geojson)return;
   window.parent.postMessage({type:"flood_polygon",data:JSON.stringify(geojson)},"*");
-  document.getElementById("hint").textContent="✓ Sent for analysis...";
+  document.getElementById("hint").textContent="Sent for analysis...";
   document.getElementById("btn").disabled=true;
 }
 var st;
@@ -434,7 +439,7 @@ function onSearch(v){
   if(v.length<3)return;
   st=setTimeout(function(){
     fetch("https://nominatim.openstreetmap.org/search?q="+encodeURIComponent(v+", India")+"&format=json&limit=1")
-      .then(r=>r.json()).then(d=>{if(d&&d[0])map.setView([+d[0].lat,+d[0].lon],13);});
+      .then(r=>r.json()).then(d=>{if(d&&d[0]){map.setView([+d[0].lat,+d[0].lon],13);map.invalidateSize();}});
   },600);
 }
 </script>
@@ -512,7 +517,7 @@ with gr.Blocks(title="Flood Risk Agent") as app:
 
     with gr.Tabs():
 
-        with gr.Tab("🏙️ Search by City"):
+        with gr.Tab("Search by City"):
             with gr.Row(equal_height=True):
                 with gr.Column(scale=1, min_width=320):
                     query_input = gr.Textbox(label="Your Question",
@@ -529,11 +534,11 @@ with gr.Blocks(title="Flood Risk Agent") as app:
             submit_btn.click(fn=analyse_location, inputs=[query_input, season_input],
                              outputs=[report_output, map_output, location_info], api_name=False)
 
-        with gr.Tab("✏️ Draw Site on Map"):
-            gr.HTML("<p style='font-family:sans-serif;font-size:13px;color:#555;margin:8px 0;'>Search for your site location, then use the polygon tool to draw your exact site boundary (max 25 km²).</p>")
+        with gr.Tab("Draw Site on Map"):
+            gr.HTML("<p style='font-family:sans-serif;font-size:13px;color:#555;margin:8px 0;'>Search for your site, then use the polygon tool (pentagon icon) to draw the site boundary. Max area 25 km².</p>")
             with gr.Row(equal_height=True):
                 with gr.Column(scale=1, min_width=320):
-                    gr.HTML(DRAW_WIDGET_HTML)
+                    gr.HTML(f'<div style="height:460px;overflow:hidden;border-radius:10px;">{DRAW_WIDGET_HTML}</div>')
                     drawn_geojson = gr.Textbox(label="", visible=False, elem_id="drawn-geojson")
                     season_input_2 = gr.Radio(choices=list(SEASON_MULTIPLIERS.keys()),
                         value="🌧️ Monsoon (Jun–Sep)", label="🗓️ Seasonal Risk Scenario", info=SEASON_INFO)
@@ -548,7 +553,7 @@ with gr.Blocks(title="Flood Risk Agent") as app:
             drawn_geojson.change(fn=lambda x: gr.update(interactive=bool(x and x.strip())),
                                  inputs=[drawn_geojson], outputs=[submit_btn_2])
 
-        with gr.Tab("📁 Upload Site Polygon"):
+        with gr.Tab("Upload Site Polygon"):
             gr.HTML("<p style='font-family:sans-serif;font-size:13px;color:#555;margin:8px 0;'>Upload a GeoJSON file of your site boundary (max 25 km², max 500KB).</p>")
             with gr.Row(equal_height=True):
                 with gr.Column(scale=1, min_width=320):
