@@ -58,13 +58,13 @@ URISK_LOGO = "data:image/png;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/4gHYSUNDX1BST0ZJ
 
 MAX_POLYGON_KM2 = 25.0
 
-# Improvement 2 — rejected broad/ambiguous location strings
+# Sanity check — reject broad/ambiguous location strings before hitting API
 REJECTED_LOCATIONS = {
     "india", "bharat", "south asia", "asia", "unknown", "location",
     "city", "town", "village", "place", "area", "region", "state", "country",
 }
 
-# Supported cached city keys for cache-hit detection
+# Keys for cache-hit detection
 CACHED_CITY_KEYS = {
     "mumbai", "delhi", "bangalore", "bengaluru", "hyderabad", "chennai",
     "kolkata", "pune", "ahmedabad", "jaipur", "lucknow", "surat", "bhopal",
@@ -75,24 +75,29 @@ CACHED_CITY_KEYS = {
 
 
 def is_dem_cached(location: str) -> bool:
-    """Check if a DEM already exists locally — avoids API call."""
+    """Check if DEM already exists locally — avoids API call."""
     key = location.lower().strip().replace(",", "").replace(" ", "_")
     first = key.split("_")[0]
     for candidate in [key, first]:
         if os.path.exists(f"data/dem/{candidate}_dem.tif"):
             return True
-    # Also check if any cached key is a substring of the location
     loc_lower = location.lower()
     for city_key in CACHED_CITY_KEYS:
         if city_key in loc_lower:
-            dem_path = f"data/dem/{city_key.replace(' ', '_')}_dem.tif"
-            if os.path.exists(dem_path):
+            if os.path.exists(f"data/dem/{city_key.replace(' ', '_')}_dem.tif"):
                 return True
     return False
 
 
+def _rate_limit_msg() -> str:
+    return (
+        "⚠️ OpenTopography API daily limit reached (50 calls/24hrs). "
+        "Pre-cached cities (Mumbai, Delhi, Bangalore, Pune etc.) still work instantly. "
+        "New city downloads resume after midnight UTC."
+    )
+
+
 def polygon_area_km2(geojson: dict) -> float:
-    """Calculate polygon area in km² using spherical excess formula."""
     try:
         if geojson.get("type") == "FeatureCollection":
             coords = geojson["features"][0]["geometry"]["coordinates"][0]
@@ -142,8 +147,10 @@ def create_plotly_map(lat, lon, risk_level, place_name, elevation,
         try:
             geom = json.loads(boundary_geojson)
             rings = []
-            if geom["type"] == "Polygon": rings = [geom["coordinates"][0]]
-            elif geom["type"] == "MultiPolygon": rings = [p[0] for p in geom["coordinates"]]
+            if geom["type"] == "Polygon":
+                rings = [geom["coordinates"][0]]
+            elif geom["type"] == "MultiPolygon":
+                rings = [p[0] for p in geom["coordinates"]]
             for ring in rings:
                 fig.add_trace(go.Scattermap(
                     lon=[c[0] for c in ring], lat=[c[1] for c in ring],
@@ -168,12 +175,10 @@ def create_plotly_map(lat, lon, risk_level, place_name, elevation,
         except Exception:
             pass
 
+    # Single marker — no text label (annotation box handles info display)
     fig.add_trace(go.Scattermap(
-        lon=[lon], lat=[lat], mode="markers+text",
+        lon=[lon], lat=[lat], mode="markers",
         marker=dict(size=14, color=color, symbol="circle"),
-        text=[f"{risk_level} Risk — {score}/100"],
-        textposition="top right",
-        textfont=dict(size=11, color=color),
         customdata=[[place_name, elev_str, catchment, season, score]],
         hovertemplate=(
             "<b>%{customdata[0]}</b><br>"
@@ -272,14 +277,6 @@ def get_elevation_display(data: dict) -> float:
     return elev.get("elevation_mean_m") or elev.get("elevation_m") or 0.0
 
 
-def _rate_limit_message() -> str:
-    return (
-        "⚠️ OpenTopography API daily limit reached (50 calls/24hrs). "
-        "Pre-cached cities (Mumbai, Delhi, Bangalore, Pune, Hyderabad etc.) still work instantly. "
-        "New city downloads will resume after midnight UTC."
-    )
-
-
 def analyse_location(user_query: str, season: str, progress=gr.Progress()):
     if not user_query.strip():
         return "Please enter a question.", DEFAULT_MAP, "No location identified."
@@ -287,27 +284,25 @@ def analyse_location(user_query: str, season: str, progress=gr.Progress()):
         progress(0.1, desc="🔍 Extracting location...")
         location = extract_location(user_query)
 
-        # Improvement 2 — sanity check: reject broad/ambiguous locations
-        loc_lower = location.lower().strip()
-        if loc_lower in REJECTED_LOCATIONS or len(loc_lower) < 3:
+        # Sanity check — reject broad/ambiguous locations
+        if location.lower().strip() in REJECTED_LOCATIONS or len(location.strip()) < 3:
             return (
                 "Could not identify a specific location. "
                 "Please mention a city or area in India (e.g. \'Is Bandra, Mumbai safe?\').",
                 DEFAULT_MAP, "Location unclear — please be more specific."
             )
 
-        # Improvement 3 — cache-aware progress message
+        # Cache-aware progress message
         cached = is_dem_cached(location)
         dem_desc = "⚡ Loading from local cache..." if cached else "🌐 Downloading satellite data (20–30s)..."
         progress(0.3, desc=dem_desc)
 
         data = full_site_analysis(location)
 
-        # Improvement 4 — explicit None check after full_site_analysis
+        # None guard — handles API failure gracefully
         if data is None:
             return (
-                "Analysis failed — could not retrieve elevation data for this location. "
-                "Try a nearby major city instead.",
+                "Analysis failed — could not retrieve elevation data. Try a major nearby city.",
                 DEFAULT_MAP, "Data retrieval failed."
             )
 
@@ -328,13 +323,12 @@ def analyse_location(user_query: str, season: str, progress=gr.Progress()):
         progress(1.0, desc="✅ Done!")
         return report, fig, f"📍 {display_name}"
 
-    # Improvement 1 — specific rate limit handling
-    except RateLimitError as e:
-        return _rate_limit_message(), DEFAULT_MAP, "API rate limit reached."
+    except RateLimitError:
+        return _rate_limit_msg(), DEFAULT_MAP, "API rate limit reached."
     except Exception as e:
         err = str(e)
         if "429" in err or "rate limit" in err.lower() or "50 API calls" in err:
-            return _rate_limit_message(), DEFAULT_MAP, "API rate limit reached."
+            return _rate_limit_msg(), DEFAULT_MAP, "API rate limit reached."
         return f"Error: {err}", DEFAULT_MAP, "Error."
 
 
@@ -359,7 +353,7 @@ def analyse_from_polygon(geojson_file, season: str, progress=gr.Progress()):
         from tools import full_site_analysis_from_polygon
         data = full_site_analysis_from_polygon(geojson)
 
-        # Improvement 4 — None check
+        # None guard
         if data is None:
             return (
                 "Analysis failed — could not retrieve elevation data for this polygon.",
@@ -388,12 +382,12 @@ def analyse_from_polygon(geojson_file, season: str, progress=gr.Progress()):
         progress(1.0, desc="✅ Done!")
         return report, fig, f"📍 {data['coordinates']['display_name']}"
 
-    except RateLimitError as e:
-        return _rate_limit_message(), DEFAULT_MAP, "API rate limit reached."
+    except RateLimitError:
+        return _rate_limit_msg(), DEFAULT_MAP, "API rate limit reached."
     except Exception as e:
         err = str(e)
         if "429" in err or "rate limit" in err.lower() or "50 API calls" in err:
-            return _rate_limit_message(), DEFAULT_MAP, "API rate limit reached."
+            return _rate_limit_msg(), DEFAULT_MAP, "API rate limit reached."
         return f"Error: {err}", DEFAULT_MAP, "Error in analysis."
 
 
@@ -445,10 +439,10 @@ EXAMPLES_HTML = (
     "<div style=\'margin-top:12px;\'>"
     "<p style=\'font-size:12px;font-weight:600;margin-bottom:8px;font-family:sans-serif;color:#444;\'>💡 Try these examples</p>"
     "<div style=\'display:grid;grid-template-columns:1fr 1fr;gap:8px;\'>"
-    "<button onclick=\'var t=document.querySelectorAll(\"textarea\")[0];t.value=\"Is Koregaon Park in Pune safe for a residential complex?\";t.dispatchEvent(new InputEvent(\"input\",{bubbles:true}));t.dispatchEvent(new Event(\"change\",{bubbles:true}));\'  style=\'background:#f0f7ff;border:2px solid #1565c0;border-radius:8px;padding:10px 12px;cursor:pointer;font-size:12px;font-family:sans-serif;text-align:left;width:100%;\'>  <div style=\'font-weight:700;color:#1565c0;margin-bottom:3px;\'>🏘️ Koregaon Park, Pune</div>  <div style=\'color:#555;\'>Residential complex · Monsoon</div></button>"
-    "<button onclick=\'var t=document.querySelectorAll(\"textarea\")[0];t.value=\"Flood risk for construction in Bandra, Mumbai?\";t.dispatchEvent(new InputEvent(\"input\",{bubbles:true}));t.dispatchEvent(new Event(\"change\",{bubbles:true}));\' style=\'background:#f0f7ff;border:2px solid #1565c0;border-radius:8px;padding:10px 12px;cursor:pointer;font-size:12px;font-family:sans-serif;text-align:left;width:100%;\'>  <div style=\'font-weight:700;color:#1565c0;margin-bottom:3px;\'>🌊 Bandra, Mumbai</div>  <div style=\'color:#555;\'>Construction site · Monsoon</div></button>"
-    "<button onclick=\'var t=document.querySelectorAll(\"textarea\")[0];t.value=\"Should I build a warehouse in Whitefield, Bangalore?\";t.dispatchEvent(new InputEvent(\"input\",{bubbles:true}));t.dispatchEvent(new Event(\"change\",{bubbles:true}));\' style=\'background:#f0f7ff;border:2px solid #1565c0;border-radius:8px;padding:10px 12px;cursor:pointer;font-size:12px;font-family:sans-serif;text-align:left;width:100%;\'>  <div style=\'font-weight:700;color:#1565c0;margin-bottom:3px;\'>🏭 Whitefield, Bangalore</div>  <div style=\'color:#555;\'>Warehouse · Dry Season</div></button>"
-    "<button onclick=\'var t=document.querySelectorAll(\"textarea\")[0];t.value=\"Is Bhagalpur safe for a data center?\";t.dispatchEvent(new InputEvent(\"input\",{bubbles:true}));t.dispatchEvent(new Event(\"change\",{bubbles:true}));\' style=\'background:#f0f7ff;border:2px solid #1565c0;border-radius:8px;padding:10px 12px;cursor:pointer;font-size:12px;font-family:sans-serif;text-align:left;width:100%;\'>  <div style=\'font-weight:700;color:#1565c0;margin-bottom:3px;\'>🖥️ Bhagalpur, Bihar</div>  <div style=\'color:#555;\'>Data center · Post-monsoon</div></button>"
+    "<button onclick=\'var t=document.querySelectorAll(\"textarea\")[0];t.value=\"Is Koregaon Park in Pune safe for a residential complex?\";t.dispatchEvent(new InputEvent(\"input\",{bubbles:true}));t.dispatchEvent(new Event(\"change\",{bubbles:true}));\'  style=\'background:#f0f7ff;border:2px solid #1565c0;border-radius:8px;padding:10px 12px;cursor:pointer;font-size:12px;font-family:sans-serif;text-align:left;width:100%;\'>  <div style=\'font-weight:700;color:#1565c0;margin-bottom:3px;\'>🏘️ Koregaon Park, Pune</div><div style=\'color:#555;\'>Residential complex · Monsoon</div></button>"
+    "<button onclick=\'var t=document.querySelectorAll(\"textarea\")[0];t.value=\"Flood risk for construction in Bandra, Mumbai?\";t.dispatchEvent(new InputEvent(\"input\",{bubbles:true}));t.dispatchEvent(new Event(\"change\",{bubbles:true}));\'  style=\'background:#f0f7ff;border:2px solid #1565c0;border-radius:8px;padding:10px 12px;cursor:pointer;font-size:12px;font-family:sans-serif;text-align:left;width:100%;\'>  <div style=\'font-weight:700;color:#1565c0;margin-bottom:3px;\'>🌊 Bandra, Mumbai</div><div style=\'color:#555;\'>Construction site · Monsoon</div></button>"
+    "<button onclick=\'var t=document.querySelectorAll(\"textarea\")[0];t.value=\"Should I build a warehouse in Whitefield, Bangalore?\";t.dispatchEvent(new InputEvent(\"input\",{bubbles:true}));t.dispatchEvent(new Event(\"change\",{bubbles:true}));\'  style=\'background:#f0f7ff;border:2px solid #1565c0;border-radius:8px;padding:10px 12px;cursor:pointer;font-size:12px;font-family:sans-serif;text-align:left;width:100%;\'>  <div style=\'font-weight:700;color:#1565c0;margin-bottom:3px;\'>🏭 Whitefield, Bangalore</div><div style=\'color:#555;\'>Warehouse · Dry Season</div></button>"
+    "<button onclick=\'var t=document.querySelectorAll(\"textarea\")[0];t.value=\"Is Bhagalpur safe for a data center?\";t.dispatchEvent(new InputEvent(\"input\",{bubbles:true}));t.dispatchEvent(new Event(\"change\",{bubbles:true}));\'  style=\'background:#f0f7ff;border:2px solid #1565c0;border-radius:8px;padding:10px 12px;cursor:pointer;font-size:12px;font-family:sans-serif;text-align:left;width:100%;\'>  <div style=\'font-weight:700;color:#1565c0;margin-bottom:3px;\'>🖥️ Bhagalpur, Bihar</div><div style=\'color:#555;\'>Data center · Post-monsoon</div></button>"
     "</div></div>"
 )
 
