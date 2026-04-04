@@ -46,7 +46,6 @@ def ensure_dems():
 
 
 ensure_dems()
-# precache_cities() disabled — DEMs restored from HF storage
 
 SEASON_MULTIPLIERS = {
     "🌧️ Monsoon (Jun–Sep)": 1.6,
@@ -58,13 +57,11 @@ URISK_LOGO = "data:image/png;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/4gHYSUNDX1BST0ZJ
 
 MAX_POLYGON_KM2 = 25.0
 
-# Sanity check — reject broad/ambiguous location strings before hitting API
 REJECTED_LOCATIONS = {
     "india", "bharat", "south asia", "asia", "unknown", "location",
     "city", "town", "village", "place", "area", "region", "state", "country",
 }
 
-# Keys for cache-hit detection
 CACHED_CITY_KEYS = {
     "mumbai", "delhi", "bangalore", "bengaluru", "hyderabad", "chennai",
     "kolkata", "pune", "ahmedabad", "jaipur", "lucknow", "surat", "bhopal",
@@ -75,7 +72,6 @@ CACHED_CITY_KEYS = {
 
 
 def is_dem_cached(location: str) -> bool:
-    """Check if DEM already exists locally — avoids API call."""
     key = location.lower().strip().replace(",", "").replace(" ", "_")
     first = key.split("_")[0]
     for candidate in [key, first]:
@@ -93,7 +89,7 @@ def _rate_limit_msg() -> str:
     return (
         "⚠️ OpenTopography API daily limit reached (50 calls/24hrs). "
         "Pre-cached cities (Mumbai, Delhi, Bangalore, Pune etc.) still work instantly. "
-        "New city downloads resume after midnight UTC."
+        "New city downloads via Planetary Computer are unaffected."
     )
 
 
@@ -120,17 +116,59 @@ def polygon_area_km2(geojson: dict) -> float:
 
 
 def get_osm_boundary(place_name: str):
-    try:
-        resp = requests.get("https://nominatim.openstreetmap.org/search",
-            params={"q": f"{place_name}, India", "format": "json",
-                    "limit": 1, "polygon_geojson": 1},
-            headers={"User-Agent": "flood-risk-agent"}, timeout=10)
-        data = resp.json()
-        if data and "geojson" in data[0]:
-            return json.dumps(data[0]["geojson"])
-    except Exception:
-        pass
-    return None
+    """
+    Get OSM boundary polygon for a place.
+    Uses limit=5, picks first Polygon/MultiPolygon result.
+    Falls through 4 strategies before giving up.
+    """
+    def _query(q, extra_params=None):
+        params = {"q": f"{q}, India", "format": "json",
+                  "limit": 5, "polygon_geojson": 1}
+        if extra_params:
+            params.update(extra_params)
+        try:
+            resp = requests.get(
+                "https://nominatim.openstreetmap.org/search",
+                params=params,
+                headers={"User-Agent": "flood-risk-agent"},
+                timeout=10
+            )
+            return resp.json()
+        except Exception:
+            return []
+
+    def _first_polygon(results):
+        for r in results:
+            geom = r.get("geojson", {})
+            if geom.get("type") in ("Polygon", "MultiPolygon"):
+                return json.dumps(geom)
+        return None
+
+    # Strategy 1: full name, pick first polygon from top 5
+    polygon = _first_polygon(_query(place_name))
+    if polygon:
+        return polygon
+
+    # Strategy 2: first part only e.g. "Koregaon Park" from "Koregaon Park, Pune"
+    first_part = place_name.split(",")[0].strip()
+    if first_part != place_name:
+        polygon = _first_polygon(_query(first_part))
+        if polygon:
+            return polygon
+
+    # Strategy 3: city-level admin boundary
+    polygon = _first_polygon(_query(place_name, {"featuretype": "city"}))
+    if polygon:
+        return polygon
+
+    # Strategy 4: district-level fallback (covers cities like Mysore/Mysuru
+    # where city polygon isn't indexed but district boundary is)
+    city_name = place_name.split(",")[0].strip()
+    polygon = _first_polygon(_query(f"{city_name} District"))
+    if polygon:
+        return polygon
+
+    return None  # marker still shows, just no boundary fill
 
 
 def create_plotly_map(lat, lon, risk_level, place_name, elevation,
@@ -175,7 +213,6 @@ def create_plotly_map(lat, lon, risk_level, place_name, elevation,
         except Exception:
             pass
 
-    # Single marker — no text label (annotation box handles info display)
     fig.add_trace(go.Scattermap(
         lon=[lon], lat=[lat], mode="markers",
         marker=dict(size=14, color=color, symbol="circle"),
@@ -223,7 +260,7 @@ def extract_location(user_query: str) -> str:
                 "Input: Is Bhagalpur safe for a data center? → Output: Bhagalpur\n"
                 "Input: flood risk in Bandra Mumbai → Output: Bandra, Mumbai\n"
                 "Input: Should I build in Whitefield Bangalore? → Output: Whitefield, Bangalore\n"
-                "Input: Should I build Data Center in Sirsa? → Output: Sirsa, Haryana\n"
+                "Input: hsr bengaluru good for warehouse → Output: HSR Layout, Bengaluru\n"
                 "Never refuse. Always output just the place name."
             )},
             {"role": "user", "content": user_query}
@@ -240,9 +277,9 @@ def generate_report(user_query: str, data: dict, season: str) -> str:
         "season": data.get("season"),
         "coordinates": data.get("coordinates", {}).get("display_name"),
         "elevation": {k: v for k, v in data.get("elevation", {}).items()
-                      if k in ["elevation_m", "elevation_mean_m", "elevation_min_m", "elevation_max_m"]},
-        "watershed": {"catchment_area_km2": data.get("watershed", {}).get("catchment_area_km2"),
-                      "flow_accumulation_at_site": data.get("watershed", {}).get("flow_accumulation_at_site")},
+                      if k in ["elevation_m","elevation_mean_m","elevation_min_m","elevation_max_m"]},
+        "watershed": {"catchment_area_km2": data.get("watershed",{}).get("catchment_area_km2"),
+                      "flow_accumulation_at_site": data.get("watershed",{}).get("flow_accumulation_at_site")},
         "risk": data.get("risk")
     }
     response = client.chat.completions.create(
@@ -284,22 +321,19 @@ def analyse_location(user_query: str, season: str, progress=gr.Progress()):
         progress(0.1, desc="🔍 Extracting location...")
         location = extract_location(user_query)
 
-        # Sanity check — reject broad/ambiguous locations
         if location.lower().strip() in REJECTED_LOCATIONS or len(location.strip()) < 3:
             return (
                 "Could not identify a specific location. "
-                "Please mention a city or area in India (e.g. \'Is Bandra, Mumbai safe?\').",
-                DEFAULT_MAP, "Location unclear — please be more specific."
+                "Please mention a city or area in India.",
+                DEFAULT_MAP, "Location unclear."
             )
 
-        # Cache-aware progress message
         cached = is_dem_cached(location)
-        dem_desc = "⚡ Loading from local cache..." if cached else "🌐 Downloading satellite data (20–30s)..."
+        dem_desc = "⚡ Loading from local cache..." if cached else "🌐 Fetching from Planetary Computer..."
         progress(0.3, desc=dem_desc)
 
         data = full_site_analysis(location)
 
-        # None guard — handles API failure gracefully
         if data is None:
             return (
                 "Analysis failed — could not retrieve elevation data. Try a major nearby city.",
@@ -345,15 +379,13 @@ def analyse_from_polygon(geojson_file, season: str, progress=gr.Progress()):
         area = polygon_area_km2(geojson)
         if area > MAX_POLYGON_KM2:
             return (
-                f"Polygon too large ({area:.1f} km²). Max {MAX_POLYGON_KM2} km². "
-                "Please clip to your actual site boundary.",
+                f"Polygon too large ({area:.1f} km²). Max {MAX_POLYGON_KM2} km².",
                 DEFAULT_MAP, "Polygon too large."
             )
-        progress(0.3, desc="🌐 Downloading & clipping DEM to polygon...")
+        progress(0.3, desc="🌐 Fetching DEM from Planetary Computer...")
         from tools import full_site_analysis_from_polygon
         data = full_site_analysis_from_polygon(geojson)
 
-        # None guard
         if data is None:
             return (
                 "Analysis failed — could not retrieve elevation data for this polygon.",
@@ -468,7 +500,7 @@ HEADER = (
     "<div style=\'background:linear-gradient(135deg,#1565c0,#0d47a1);padding:16px 24px;border-radius:12px;margin-bottom:12px;"
     "display:flex;justify-content:space-between;align-items:center;\'>"
     "<div><h1 style=\'color:white;margin:0;font-size:22px;font-weight:700;\'>🌊 Flood Risk Agent — Analyze any site for Risk Score</h1>"
-    "<p style=\'color:#bbdefb;margin:4px 0 0;font-size:13px;\'>Powered by Llama 3 &nbsp;·&nbsp; ALOS DEM (30m) &nbsp;·&nbsp; OpenStreetMap</p></div>"
+    "<p style=\'color:#bbdefb;margin:4px 0 0;font-size:13px;\'>Powered by Llama 3 &nbsp;·&nbsp; Copernicus DEM (30m) &nbsp;·&nbsp; OpenStreetMap</p></div>"
     f"<div style=\'background:white;padding:8px 14px;border-radius:10px;\'>"
     f"<img src=\'{URISK_LOGO}\' style=\'height:48px;object-fit:contain;\' alt=\'uRisk\'/></div></div>"
 )
@@ -482,7 +514,7 @@ with gr.Blocks(title="Flood Risk Agent") as app:
             with gr.Row(equal_height=True):
                 with gr.Column(scale=1, min_width=320):
                     query_input = gr.Textbox(label="Your Question",
-                        placeholder="e.g. Is Whitefield in Bangalore safe for building apartments?", lines=2)
+                        placeholder="e.g. Is HSR Layout in Bangalore safe for a warehouse?", lines=2)
                     season_input = gr.Radio(choices=list(SEASON_MULTIPLIERS.keys()),
                         value="🌧️ Monsoon (Jun–Sep)", label="🗓️ Seasonal Risk Scenario", info=SEASON_INFO)
                     submit_btn = gr.Button("🔍 Analyse Site", variant="primary")
