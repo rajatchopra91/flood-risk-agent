@@ -11,42 +11,6 @@ import plotly.graph_objects as go
 
 load_dotenv()
 
-
-def ensure_dems():
-    from huggingface_hub import hf_hub_download
-    token = os.getenv("HF_TOKEN")
-    if not token:
-        print("No HF_TOKEN — skipping DEM restore")
-        return
-    dem_files = [
-        "mumbai_dem.tif","delhi_dem.tif","bangalore_dem.tif","pune_dem.tif",
-        "hyderabad_dem.tif","chennai_dem.tif","kolkata_dem.tif","ahmedabad_dem.tif",
-        "jaipur_dem.tif","lucknow_dem.tif","surat_dem.tif","bhopal_dem.tif",
-        "patna_dem.tif","nagpur_dem.tif","indore_dem.tif","noida_dem.tif",
-        "bandra_dem.tif","bhagalpur_dem.tif","sirsa_dem.tif","haridwar_dem.tif",
-        "dehradun_dem.tif","srinagar_dem.tif","thane_dem.tif","whitefield_dem.tif",
-        "koregaon_park_dem.tif"
-    ]
-    os.makedirs("data/dem", exist_ok=True)
-    restored = 0
-    for f in dem_files:
-        local = f"data/dem/{f}"
-        if not os.path.exists(local):
-            try:
-                hf_hub_download(repo_id="rajatchopra91/flood-risk-agent",
-                                repo_type="space", filename=f"data/dem/{f}",
-                                local_dir=".", token=token)
-                restored += 1
-                print(f"Restored {f}")
-            except Exception as e:
-                print(f"Could not restore {f}: {e}")
-        else:
-            restored += 1
-    print(f"DEMs ready: {restored}/{len(dem_files)}")
-
-
-ensure_dems()
-
 SEASON_MULTIPLIERS = {
     "🌧️ Monsoon (Jun–Sep)": 1.6,
     "🌦️ Post-monsoon (Oct–Dec)": 1.2,
