@@ -24,7 +24,7 @@ def get_city_bbox(city_name: str, country: str = "India"):
     location = geolocator.geocode(f"{city_name}, {country}")
     if not location:
         raise ValueError(f"Could not find city: {city_name}")
-    # Pro tip: round to 2 decimal places (~1km precision) for cache hits
+    # Round to 2dp (~1km precision) — cache key consistency
     lat = round(location.latitude, 2)
     lon = round(location.longitude, 2)
     offset = 0.10  # ~11km radius
@@ -39,25 +39,62 @@ def get_city_bbox(city_name: str, country: str = "India"):
     }
 
 
+def _sync_to_hub(local_path: str):
+    """Push a newly downloaded DEM to HF Space storage for persistence."""
+    try:
+        token = os.getenv("HF_TOKEN")
+        if not token:
+            return
+        from huggingface_hub import HfApi
+        api = HfApi()
+        filename = os.path.basename(local_path)
+        api.upload_file(
+            path_or_fileobj=local_path,
+            path_in_repo=f"data/dem/{filename}",
+            repo_id="rajatchopra91/flood-risk-agent",
+            repo_type="space",
+            token=token
+        )
+        print(f"Synced to HF Hub: {filename}")
+    except Exception as e:
+        print(f"HF Hub sync warning (non-fatal): {e}")
+
+
 def _make_dem_request(params: dict, output_path: str) -> str:
-    """Shared DEM download logic with rate limit detection."""
+    """Shared DEM download with atomic write + rate limit detection."""
     response = requests.get(
         "https://portal.opentopography.org/API/globaldem",
         params=params, stream=True, timeout=60
     )
+
+    # Improvement 1 — specific 429 handling with reset time
     if response.status_code == 429:
         reset_header = response.headers.get("X-RateLimit-Reset", "")
-        msg = f"OpenTopography rate limit hit (50 calls/24hrs)."
+        msg = "OpenTopography rate limit hit (50 calls/24hrs)."
         if reset_header:
             msg += f" Resets at: {reset_header} UTC."
         raise RateLimitError(msg)
-    if response.status_code == 200:
-        with open(output_path, "wb") as f:
+
+    if response.status_code != 200:
+        raise Exception(f"Download failed: {response.status_code} - {response.text}")
+
+    # Atomic download — write to temp file, rename on success
+    tmp_path = output_path + ".tmp"
+    try:
+        with open(tmp_path, "wb") as f:
             for chunk in response.iter_content(chunk_size=8192):
                 f.write(chunk)
+        os.replace(tmp_path, output_path)  # atomic on POSIX
         print(f"DEM saved: {output_path}")
-        return output_path
-    raise Exception(f"Download failed: {response.status_code} - {response.text}")
+    except Exception as e:
+        # Clean up partial temp file on failure
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise Exception(f"Write failed: {e}")
+
+    # Sync to HF Hub so it survives container restarts
+    _sync_to_hub(output_path)
+    return output_path
 
 
 def download_dem(city_name: str, output_dir: str = "data/dem"):
@@ -106,7 +143,7 @@ def precache_cities():
         except Exception as e:
             print(f"Pre-cache skipped {city}: {e}")
 
-    print(f"Pre-caching DEMs for {len(TOP_CITIES)} cities in background...")
+    print(f"Pre-caching DEMs for {len(TOP_CITIES)} cities...")
     for city in TOP_CITIES:
         t = threading.Thread(target=cache_one, args=(city,), daemon=True)
         t.start()
