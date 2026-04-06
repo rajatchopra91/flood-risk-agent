@@ -6,22 +6,28 @@ import numpy as np
 import rasterio
 from rasterio.transform import rowcol
 from rasterio.mask import mask as rio_mask
-from shapely.geometry import shape
+from rasterio import features as rasterio_features
+from shapely.geometry import shape, mapping
+from shapely.ops import transform as shapely_transform
+import pyproj
 from pysheds.grid import Grid
 from geocoder import geocode
-from dem_downloader import download_dem, download_dem_for_bbox, RateLimitError, cleanup_dem_cache
+from dem_downloader import download_dem_for_bbox, RateLimitError, cleanup_dem_cache, _download_with_fallback
 
 warnings.filterwarnings("ignore", category=UserWarning, module="pysheds")
 
 
 def get_polygon_geometry(geojson: dict):
+    """Extract and repair geometry from any GeoJSON type."""
     if geojson.get("type") == "Polygon":
-        return geojson
+        geom = geojson
     elif geojson.get("type") == "Feature":
-        return geojson["geometry"]
+        geom = geojson["geometry"]
     elif geojson.get("type") == "FeatureCollection":
-        return geojson["features"][0]["geometry"]
-    raise ValueError(f"Unsupported GeoJSON type: {geojson.get('type')}")
+        geom = geojson["features"][0]["geometry"]
+    else:
+        raise ValueError(f"Unsupported GeoJSON type: {geojson.get('type')}")
+    return mapping(shape(geom).buffer(0))  # buffer(0) repairs self-intersections
 
 
 def get_polygon_bbox(geojson: dict):
@@ -31,26 +37,25 @@ def get_polygon_bbox(geojson: dict):
     lon = round((bounds[0] + bounds[2]) / 2, 2)
     padding = 0.05
     return {
-        "south": bounds[1] - padding,
-        "north": bounds[3] + padding,
-        "west": bounds[0] - padding,
-        "east": bounds[2] + padding,
-        "center_lat": lat,
-        "center_lon": lon,
+        "south": bounds[1] - padding, "north": bounds[3] + padding,
+        "west": bounds[0] - padding, "east": bounds[2] + padding,
+        "center_lat": lat, "center_lon": lon,
     }
 
 
+def get_polygon_centroid(geojson: dict):
+    geom = shape(get_polygon_geometry(geojson))
+    return round(geom.centroid.y, 4), round(geom.centroid.x, 4)
+
+
 def clip_dem_to_polygon(dem_path: str, geojson: dict, output_path: str):
+    """Clip DEM to polygon. all_touched=True captures shapes smaller than one pixel."""
     geometry = get_polygon_geometry(geojson)
     with rasterio.open(dem_path) as src:
-        clipped, transform = rio_mask(src, [geometry], crop=True, nodata=-9999)
+        clipped, transform = rio_mask(src, [geometry], crop=True, nodata=-9999, all_touched=True)
         profile = src.profile.copy()
-        profile.update({
-            "height": clipped.shape[1],
-            "width": clipped.shape[2],
-            "transform": transform,
-            "nodata": -9999
-        })
+        profile.update({"height": clipped.shape[1], "width": clipped.shape[2],
+                        "transform": transform, "nodata": -9999})
     os.makedirs(os.path.dirname(output_path) or "data/dem", exist_ok=True)
     with rasterio.open(output_path, "w", **profile) as dst:
         dst.write(clipped)
@@ -60,11 +65,7 @@ def clip_dem_to_polygon(dem_path: str, geojson: dict, output_path: str):
 def get_coordinates(place_name: str) -> dict:
     """Geocode via Photon -> Nominatim fallback."""
     result = geocode(place_name)
-    return {
-        "lat": result["lat"],
-        "lon": result["lon"],
-        "display_name": result["display_name"]
-    }
+    return {"lat": result["lat"], "lon": result["lon"], "display_name": result["display_name"]}
 
 
 def query_elevation(lat: float, lon: float, dem_path: str):
@@ -88,14 +89,17 @@ def query_elevation_stats(dem_path: str):
             return {"elevation_min_m": 0.0, "elevation_max_m": 0.0,
                     "elevation_mean_m": 0.0, "elevation_m": 0.0}
     return {
-        "elevation_min_m": float(valid.min()),
-        "elevation_max_m": float(valid.max()),
-        "elevation_mean_m": float(valid.mean()),
-        "elevation_m": float(valid.mean())
+        "elevation_min_m": float(valid.min()), "elevation_max_m": float(valid.max()),
+        "elevation_mean_m": float(valid.mean()), "elevation_m": float(valid.mean())
     }
 
 
 def analyze_watershed(dem_path: str, lat: float, lon: float):
+    """
+    Hydrological analysis using pysheds.
+    Returns catchment area, flow accumulation, and catchment GeoJSON for map overlay.
+    Coordinates stay in WGS84 — pysheds handles geographic CRS natively.
+    """
     grid = None
     try:
         grid = Grid.from_raster(dem_path)
@@ -105,19 +109,50 @@ def analyze_watershed(dem_path: str, lat: float, lon: float):
         inflated = grid.resolve_flats(flooded)
         fdir = grid.flowdir(inflated)
         acc = grid.accumulation(fdir)
+
         x, y = lon, lat
+        # Get grid bounds for clamping — critical for small polygon DEMs
+        bbox = grid.bbox  # (left, bottom, right, top)
+
         try:
             snap_x, snap_y = grid.snap_to_mask(acc > 1000, (x, y))
+            # Clamp snap coords within grid bounds
+            snap_x = max(bbox[0], min(bbox[2], snap_x))
+            snap_y = max(bbox[1], min(bbox[3], snap_y))
         except Exception:
             snap_x, snap_y = x, y
-        catch = grid.catchment(x=snap_x, y=snap_y, fdir=fdir, xytype='coordinate')
+
+        # Final safety clamp before catchment call
+        snap_x = max(bbox[0], min(bbox[2], snap_x))
+        snap_y = max(bbox[1], min(bbox[3], snap_y))
+
+        # Try snapped point first, fall back to original centroid
+        try:
+            catch = grid.catchment(x=snap_x, y=snap_y, fdir=fdir, xytype='coordinate')
+        except Exception:
+            catch = grid.catchment(x=x, y=y, fdir=fdir, xytype='coordinate')
+
+        # Area in km² — pixel size ~30m so 30*30 = 900m² per cell
         catchment_area_km2 = float(catch.sum() * (30 * 30) / 1e6)
         flow_at_site = float(acc[grid.nearest_cell(x, y)])
+
+        # Convert catchment mask to GeoJSON polygon for map overlay
+        catchment_geojson = None
+        try:
+            catch_int = catch.astype(np.int32)
+            shapes = list(rasterio_features.shapes(catch_int, mask=catch_int > 0,
+                                                    transform=grid.affine))
+            if shapes:
+                geom, _ = shapes[0]
+                catchment_geojson = geom  # already in WGS84
+        except Exception:
+            pass
+
         return {
             "catchment_area_km2": round(catchment_area_km2, 2),
-            "snap_lat": snap_y,
-            "snap_lon": snap_x,
-            "flow_accumulation_at_site": flow_at_site
+            "snap_lat": snap_y, "snap_lon": snap_x,
+            "flow_accumulation_at_site": flow_at_site,
+            "catchment_geojson": catchment_geojson
         }
     finally:
         del grid
@@ -141,47 +176,31 @@ def calculate_flood_risk(elevation_m: float, catchment_area_km2: float, flow_acc
 def full_site_analysis(place_name: str):
     print(f"Analysing flood risk for: {place_name}")
     try:
-        # Single geocode call — reuse coords for both DEM bbox and elevation query
         coords = get_coordinates(place_name)
         lat, lon = coords["lat"], coords["lon"]
         city = place_name.split(",")[0].strip()
-
-        # Build bbox from already-geocoded coords (skip second geocode in download_dem)
-        from dem_downloader import _download_with_fallback, cleanup_dem_cache, PROTECTED_DEMS
-        import os
         output_dir = "data/dem"
         output_path = f"{output_dir}/{city.lower().replace(' ', '_')}_dem.tif"
         os.makedirs(output_dir, exist_ok=True)
 
-        if os.path.exists(output_path):
-            print(f"Cache hit: {output_path}")
-            dem_path = output_path
-        else:
+        if not os.path.exists(output_path):
             offset = 0.10
-            bbox = {
-                "south": lat - offset, "north": lat + offset,
-                "west": lon - offset, "east": lon + offset,
-                "center_lat": lat, "center_lon": lon
-            }
+            bbox = {"south": lat-offset, "north": lat+offset,
+                    "west": lon-offset, "east": lon+offset}
             print(f"Downloading DEM for {city} (coords from Photon)...")
             _download_with_fallback(bbox, output_path)
             cleanup_dem_cache(output_dir)
-            dem_path = output_path
 
-        elev = query_elevation(lat, lon, dem_path)
-        watershed = analyze_watershed(dem_path, lat, lon)
+        elev = query_elevation(lat, lon, output_path)
+        watershed = analyze_watershed(output_path, lat, lon)
         risk = calculate_flood_risk(
-            elev["elevation_m"],
-            watershed["catchment_area_km2"],
+            elev["elevation_m"], watershed["catchment_area_km2"],
             watershed["flow_accumulation_at_site"]
         )
         return {
-            "place": place_name,
-            "coordinates": coords,
-            "elevation": elev,
-            "watershed": watershed,
-            "risk": risk,
-            "input_type": "city_name"
+            "place": place_name, "coordinates": coords,
+            "elevation": elev, "watershed": watershed,
+            "risk": risk, "input_type": "city_name"
         }
     except RateLimitError:
         raise
@@ -203,14 +222,12 @@ def full_site_analysis_from_coords(lat: float, lon: float, radius_m: int = 1000)
         elev = query_elevation(lat, lon, dem_path)
         watershed = analyze_watershed(dem_path, lat, lon)
         risk = calculate_flood_risk(
-            elev["elevation_m"],
-            watershed["catchment_area_km2"],
+            elev["elevation_m"], watershed["catchment_area_km2"],
             watershed["flow_accumulation_at_site"]
         )
         return {
             "place": f"Site at {lat:.5f}, {lon:.5f}",
-            "coordinates": {"lat": lat, "lon": lon,
-                            "display_name": f"{lat:.5f}°N, {lon:.5f}°E"},
+            "coordinates": {"lat": lat, "lon": lon, "display_name": f"{lat:.5f}°N, {lon:.5f}°E"},
             "elevation": elev, "watershed": watershed,
             "risk": risk, "input_type": "coordinates"
         }
@@ -225,15 +242,16 @@ def full_site_analysis_from_polygon(geojson: dict):
     print("Analysing flood risk for uploaded polygon...")
     try:
         bbox = get_polygon_bbox(geojson)
-        lat, lon = bbox["center_lat"], bbox["center_lon"]
-        dem_path, _ = download_dem_for_bbox(bbox, f"polygon_{lat}_{lon}")
-        clipped_path = f"data/dem/clipped_{lat}_{lon}.tif"
+        lat, lon = get_polygon_centroid(geojson)
+        dem_path, _ = download_dem_for_bbox(bbox, f"polygon_{bbox['center_lat']}_{bbox['center_lon']}")
+
+        clipped_path = f"data/dem/clipped_{bbox['center_lat']}_{bbox['center_lon']}.tif"
         clip_dem_to_polygon(dem_path, geojson, clipped_path)
+
         elev_stats = query_elevation_stats(clipped_path)
         watershed = analyze_watershed(clipped_path, lat, lon)
         risk = calculate_flood_risk(
-            elev_stats["elevation_mean_m"],
-            watershed["catchment_area_km2"],
+            elev_stats["elevation_mean_m"], watershed["catchment_area_km2"],
             watershed["flow_accumulation_at_site"]
         )
         cleanup_dem_cache()

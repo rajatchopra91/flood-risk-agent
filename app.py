@@ -253,6 +253,9 @@ def generate_report(user_query: str, data: dict, season: str) -> str:
                 "You are a flood risk analyst for Indian construction sites. "
                 "Write a 3-4 sentence plain-language indicative assessment. "
                 "IMPORTANT: Always use the exact risk_level and risk_score from the data. "
+                "EXPLAIN THE DRIVERS: if flow_accumulation_at_site > 10000, say the site sits in "
+                "a natural drainage path. If elevation_m < 50, highlight low elevation as a risk factor. "
+                "If catchment_area_km2 > 100, mention the large upstream catchment area. "
                 "When mentioning season, clarify it is a modelled scenario, not measured data. "
                 "End with: For a detailed certified assessment, consult a flood risk specialist at uRisk. "
                 "Be specific with numbers. No bullet points."
@@ -293,7 +296,7 @@ def analyse_location(user_query: str, season: str, progress=gr.Progress()):
             )
 
         cached = is_dem_cached(location)
-        dem_desc = "⚡ Loading from local cache..." if cached else "🌐 Fetching from Planetary Computer..."
+        dem_desc = "⚡ Loading from local cache..." if cached else "🌐 Streaming 30m DEM from Planetary Computer..."
         progress(0.3, desc=dem_desc)
 
         data = full_site_analysis(location)
@@ -304,7 +307,7 @@ def analyse_location(user_query: str, season: str, progress=gr.Progress()):
                 DEFAULT_MAP, "Data retrieval failed."
             )
 
-        progress(0.6, desc="🌊 Analysing watershed & flood risk...")
+        progress(0.6, desc="🌊 Computing hydrological flow accumulation & catchment...")
         data = apply_season(data, season)
         lat = data["coordinates"]["lat"]
         lon = data["coordinates"]["lon"]
@@ -346,7 +349,7 @@ def analyse_from_polygon(geojson_file, season: str, progress=gr.Progress()):
                 f"Polygon too large ({area:.1f} km²). Max {MAX_POLYGON_KM2} km².",
                 DEFAULT_MAP, "Polygon too large."
             )
-        progress(0.3, desc="🌐 Fetching DEM from Planetary Computer...")
+        progress(0.3, desc="🌐 Streaming 30m DEM from Planetary Computer...")
         from tools import full_site_analysis_from_polygon
         data = full_site_analysis_from_polygon(geojson)
 
@@ -356,7 +359,7 @@ def analyse_from_polygon(geojson_file, season: str, progress=gr.Progress()):
                 DEFAULT_MAP, "Data retrieval failed."
             )
 
-        progress(0.6, desc="🌊 Analysing flood risk...")
+        progress(0.6, desc="🌊 Computing hydrological flow accumulation & catchment...")
         data = apply_season(data, season)
         elevation = get_elevation_display(data)
         catchment = data["watershed"]["catchment_area_km2"]
@@ -464,7 +467,9 @@ HEADER = (
     "<div style=\'background:linear-gradient(135deg,#1565c0,#0d47a1);padding:16px 24px;border-radius:12px;margin-bottom:12px;"
     "display:flex;justify-content:space-between;align-items:center;\'>"
     "<div><h1 style=\'color:white;margin:0;font-size:22px;font-weight:700;\'>🌊 Flood Risk Agent — Analyze any site for Risk Score</h1>"
-    "<p style=\'color:#bbdefb;margin:4px 0 0;font-size:13px;\'>Powered by Llama 3 &nbsp;·&nbsp; Copernicus DEM (30m) &nbsp;·&nbsp; OpenStreetMap</p></div>"
+    "<p style=\'color:#bbdefb;margin:4px 0 0;font-size:13px;\'>Powered by Llama 3 &nbsp;·&nbsp; Copernicus DEM (30m) &nbsp;·&nbsp; OpenStreetMap</p>"
+    "<a href=\'https://huggingface.co/spaces/rajatchopra91/flood-risk-agent/discussions\' target=\'_blank\' "
+    "style=\'color:#bbdefb;font-size:11px;margin-top:6px;display:inline-block;text-decoration:none;\'>💬 Report an issue or suggest a city</a></div>"
     f"<div style=\'background:white;padding:8px 14px;border-radius:10px;\'>"
     f"<img src=\'{URISK_LOGO}\' style=\'height:48px;object-fit:contain;\' alt=\'uRisk\'/></div></div>"
 )

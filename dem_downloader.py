@@ -29,7 +29,7 @@ class RateLimitError(Exception):
     pass
 
 
-def cleanup_dem_cache(output_dir: str = "data/dem", max_mb: int = 400):
+def cleanup_dem_cache(output_dir: str = "data/dem", max_mb: int = 500):
     """
     Size-based cache eviction — removes oldest non-protected DEMs
     when total cache exceeds max_mb. Protects pre-cached city files.
@@ -206,18 +206,20 @@ def download_dem_for_bbox(bbox: dict, name: str, output_dir: str = "data/dem"):
 
 
 def precache_cities():
-    """Pre-download DEMs for top Indian cities in background threads."""
+    """Pre-download DEMs for top Indian cities — max 3 concurrent threads."""
     import threading
+    semaphore = threading.Semaphore(3)
 
     def cache_one(city):
-        try:
-            download_dem(city)
-        except RateLimitError as e:
-            print(f"Pre-cache rate limited: {e}")
-        except Exception as e:
-            print(f"Pre-cache skipped {city}: {e}")
+        with semaphore:
+            try:
+                download_dem(city)
+            except RateLimitError as e:
+                print(f"Pre-cache rate limited: {e}")
+            except Exception as e:
+                print(f"Pre-cache skipped {city}: {e}")
 
-    print(f"Pre-caching DEMs for {len(TOP_CITIES)} cities...")
+    print(f"Pre-caching DEMs for {len(TOP_CITIES)} cities (max 3 concurrent)...")
     for city in TOP_CITIES:
         t = threading.Thread(target=cache_one, args=(city,), daemon=True)
         t.start()
